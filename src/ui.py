@@ -266,22 +266,25 @@ class _MenuVertical:
 # Menú principal
 # ---------------------------------------------------------
 class MenuPrincipal(_MenuVertical):
+    ACCIONES = ["nueva", "cargar", "Opciones", "debug", "Salir"]
+
     def __init__(self):
-        super().__init__(["Jugar", "Opciones", "Modo debug: no", "Salir"])
+        super().__init__(["Nueva partida", "Cargar partida (vacío)",
+                          "Opciones", "Modo debug: no", "Salir"])
         self.fuente_titulo = pygame.font.Font(None, 100)
         self.fuente_sub = pygame.font.Font(None, 26)
 
     def refrescar_debug(self, activo):
-        self.opciones[2] = f"Modo debug: {'sí' if activo else 'no'}"
+        self.opciones[3] = f"Modo debug: {'sí' if activo else 'no'}"
+
+    def refrescar_guardado(self, hay_partida):
+        self.opciones[1] = ("Cargar partida" if hay_partida
+                            else "Cargar partida (vacío)")
 
     def manejar_evento(self, evento):
-        """Devuelve "Jugar" / "Opciones" / "debug" / "Salir" / None."""
+        """Devuelve "nueva"/"cargar"/"Opciones"/"debug"/"Salir"/None."""
         i = self._navegar(evento)
-        if i is None:
-            return None
-        if i == 2:
-            return "debug"
-        return self.opciones[i]
+        return None if i is None else self.ACCIONES[i]
 
     def dibujar(self, superficie):
         superficie.fill(COLOR_FONDO)
@@ -290,8 +293,8 @@ class MenuPrincipal(_MenuVertical):
         sub = self.fuente_sub.render(
             "Un local de comidas al frente. Un imperio por detrás.",
             True, COLOR_TEXTO_SUAVE)
-        superficie.blit(sub, ((ANCHO_VENTANA - sub.get_width()) // 2, 185))
-        self._dibujar_opciones(superficie, 265)
+        superficie.blit(sub, ((ANCHO_VENTANA - sub.get_width()) // 2, 180))
+        self._dibujar_opciones(superficie, 235)
         pie = self.fuente_sub.render(
             "Mouse o W/S + ENTER", True, COLOR_TEXTO_SUAVE)
         superficie.blit(pie, ((ANCHO_VENTANA - pie.get_width()) // 2, ALTO_VENTANA - 50))
@@ -349,30 +352,34 @@ class PantallaOpciones(_MenuVertical):
 # Menú de pausa (se dibuja sobre el juego congelado)
 # ---------------------------------------------------------
 class MenuPausa(_MenuVertical):
+    ACCIONES = ["Continuar", "guardar", "Pantalla completa",
+                "debug", "Menú principal"]
+
     def __init__(self):
-        super().__init__(["Continuar", "Pantalla completa",
+        super().__init__(["Continuar", "Guardar partida", "Pantalla completa",
                           "Modo debug: no", "Menú principal"])
         self.fuente_titulo = pygame.font.Font(None, 72)
+        self.fuente_chica = pygame.font.Font(None, 24)
+        self.mensaje = ""
 
     def refrescar_debug(self, activo):
-        self.opciones[2] = f"Modo debug: {'sí' if activo else 'no'}"
+        self.opciones[3] = f"Modo debug: {'sí' if activo else 'no'}"
 
     def manejar_evento(self, evento):
         if evento.type == pygame.KEYDOWN and evento.key == pygame.K_ESCAPE:
             return "Continuar"
         i = self._navegar(evento)
-        if i is None:
-            return None
-        if i == 2:
-            return "debug"
-        return self.opciones[i]
+        return None if i is None else self.ACCIONES[i]
 
     def dibujar(self, superficie):
         velo = _panel(ANCHO_VENTANA, ALTO_VENTANA, alpha=150)
         superficie.blit(velo, (0, 0))
         titulo = self.fuente_titulo.render("PAUSA", True, COLOR_ORO)
-        superficie.blit(titulo, ((ANCHO_VENTANA - titulo.get_width()) // 2, 170))
-        self._dibujar_opciones(superficie, 280)
+        superficie.blit(titulo, ((ANCHO_VENTANA - titulo.get_width()) // 2, 145))
+        self._dibujar_opciones(superficie, 235)
+        if self.mensaje:
+            img = self.fuente_chica.render(self.mensaje, True, COLOR_DINERO)
+            superficie.blit(img, ((ANCHO_VENTANA - img.get_width()) // 2, 480))
 
 
 # ---------------------------------------------------------

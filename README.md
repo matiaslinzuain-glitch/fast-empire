@@ -28,6 +28,7 @@ python3 main.py
 | E | Atender clientes, cocinar, teléfono, levantar cajas, almacén |
 | T | Árbol de habilidades |
 | TAB | Mostrar/ocultar el panel de recursos |
+| F5 | Guardar la partida (también desde el menú de pausa) |
 | Cmd+F o F11 | Pantalla completa / ventana (también en Pausa y Opciones) |
 | ESC | Pausa (en el juego) / volver (en menús) |
 | Mouse o W/S + ENTER | Navegar y confirmar en todos los menús |
@@ -105,6 +106,20 @@ Receta Especial.
     curación completa por $50, un **segundo almacén**, y los galpones del
     puerto. El **arroyo** cruza el este del mapa con dos puentes; del otro
     lado, la Costanera.
+
+## Guardado de partidas
+
+- **Menú principal**: "Nueva partida" arranca de cero; "Cargar partida"
+  retoma la guardada (dice "(vacío)" si no hay ninguna).
+- **Se guarda solo**: cada 60 segundos jugando, al volver al menú principal
+  y al cerrar la ventana. **Manual**: F5 o "Guardar partida" en la pausa.
+- Se guarda lo permanente (plata, banco, inventario, habilidades,
+  franquicias con sus rivales eliminados, receta, misiones cumplidas,
+  pedidos en camino, cajas y tu posición). Lo transitorio (persecuciones,
+  clientes, punto ilegal) arranca fresco al cargar.
+- El archivo vive en `partidas/partida.json` (un slot; una partida nueva lo
+  pisa en el primer guardado). La carpeta está en el `.gitignore`: cada
+  jugador tiene su propia partida.
 
 ## Modo debug
 

@@ -46,6 +46,7 @@ from src.economy import (
 from src.npcs import ClienteLocal, CompradorIlegal, Proveedor
 from src.dialogue import CajaDialogo
 from src.audio import Audio
+from src import savegame
 from src.enemies import (
     Busqueda, Proyectil, RivalGastronomico,
     crear_inspectores, crear_rivales,
@@ -69,6 +70,7 @@ RESPAWN_RIVAL = 60
 DURACION_AVISO = 2.6
 MAX_COMPRADORES = 3       # compradores simultáneos en el punto
 SEGUNDOS_RETIRADA = 8.0   # con búsqueda en 0, los inspectores se van
+SEGUNDOS_AUTOSAVE = 60.0  # guardado automático durante la partida
 
 
 class Juego:
@@ -108,6 +110,9 @@ class Juego:
         # Modo debug (menú principal): atravesar paredes.
         # Vive en Juego, no en nueva_partida: sobrevive a las partidas.
         self.debug = False
+        # True cuando hay una partida en marcha (para el autosave al salir)
+        self.partida_activa = False
+        self.menu.refrescar_guardado(savegame.existe())
 
         self.nueva_partida()
 
@@ -158,6 +163,14 @@ class Juego:
         self.habia_persecucion = False
         self.aviso = None
         self.aviso_timer = 0.0
+        self.timer_autosave = SEGUNDOS_AUTOSAVE
+
+    def _guardar_partida(self, aviso=None):
+        ok = savegame.guardar(self)
+        self.menu.refrescar_guardado(savegame.existe())
+        if ok and aviso and self.estado == "jugando":
+            self._texto_sobre_jugador(aviso, COLOR_DINERO)
+        return ok
 
     def ejecutar(self):
         while self.corriendo:
@@ -177,6 +190,9 @@ class Juego:
     # -----------------------------------------------------
     def _manejar_evento(self, evento):
         if evento.type == pygame.QUIT:
+            # Que cerrar la ventana nunca te haga perder el progreso
+            if self.partida_activa:
+                self._guardar_partida()
             self.corriendo = False
             return
         # Pantalla completa desde cualquier estado: Cmd+F (Mac) o F11.
@@ -202,9 +218,18 @@ class Juego:
 
         if self.estado == "menu":
             accion = self.menu.manejar_evento(evento)
-            if accion == "Jugar":
+            if accion == "nueva":
                 self.nueva_partida()
+                self.partida_activa = True
                 self.estado = "jugando"
+            elif accion == "cargar":
+                datos = savegame.cargar()
+                if datos is not None:
+                    self.nueva_partida()
+                    savegame.aplicar(self, datos)
+                    self.partida_activa = True
+                    self.estado = "jugando"
+                    self._texto_sobre_jugador("Partida cargada", COLOR_DINERO)
             elif accion == "Opciones":
                 self.opciones.refrescar(self.audio, self.pantalla_completa)
                 self.estado = "opciones"
@@ -229,7 +254,10 @@ class Juego:
         elif self.estado == "jugando":
             if evento.type == pygame.KEYDOWN:
                 if evento.key == pygame.K_ESCAPE:
+                    self.pausa.mensaje = ""
                     self.estado = "pausa"
+                elif evento.key == pygame.K_F5:
+                    self._guardar_partida("Partida guardada (F5)")
                 elif evento.key == pygame.K_e:
                     self._interactuar()
                 elif evento.key == pygame.K_t:
@@ -244,11 +272,17 @@ class Juego:
             accion = self.pausa.manejar_evento(evento)
             if accion == "Continuar":
                 self.estado = "jugando"
+            elif accion == "guardar":
+                ok = self._guardar_partida()
+                self.pausa.mensaje = ("Partida guardada ✓" if ok
+                                      else "No se pudo guardar")
             elif accion == "Pantalla completa":
                 self._alternar_pantalla_completa()
             elif accion == "debug":
                 self._alternar_debug()
             elif accion == "Menú principal":
+                # Guardar antes de abandonar, por las dudas
+                self._guardar_partida()
                 self.estado = "menu"
 
         elif self.estado == "tienda":
@@ -758,6 +792,12 @@ class Juego:
                 self.proveedor = None
 
         self._actualizar_mision(dt)
+
+        # Guardado automático
+        self.timer_autosave -= dt
+        if self.timer_autosave <= 0:
+            self.timer_autosave = SEGUNDOS_AUTOSAVE
+            self._guardar_partida("Guardado automático")
 
         # Ingreso pasivo de las franquicias
         self.timer_franquicia -= dt
