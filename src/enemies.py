@@ -1,5 +1,5 @@
 # =========================================================
-# FAST EMPIRE — Enemigos e IA  [Fase 3]
+# FAST EMPIRE — Enemigos e IA  [Fase 11]
 #
 # - Busqueda: nivel global 0–5 estilo "estrellas". Sube por
 #   infracciones vistas (vender, disparar, agredir) y decae
@@ -9,17 +9,15 @@
 # - InspectorSanitario: patrulla en ruta fija con cono de
 #   visión. Estados: patrullar → investigar (escuchó un tiro)
 #   → perseguir (te vio en falta) → buscar (te perdió).
-#   Si te toca mientras persigue: arresto (multa + producto).
+#   Desde la Fase 11 persigue con pathfinding A*: rodea las
+#   manzanas en vez de quedarse empujando la pared, y al
+#   buscarte recorre la zona en serio.
 #
-# - RivalGastronomico: vendedor competidor con territorio.
-#   Te ignora hasta que vendés demasiado (UMBRAL_AMENAZA_RIVALES);
-#   después te ataca a tiros si te ve y te caza si te perdió.
+# - RivalGastronomico ("contrabandistas"): competidores del
+#   mercado negro. Mucho más duros desde la Fase 11: más
+#   vida, más daño, y te cazan con pathfinding.
 #
 # - Proyectil: bala genérica (del jugador o de rivales).
-#
-# La persecución es en línea recta con deslizamiento contra
-# paredes (sin pathfinding); alcanza para la Fase 3 porque las
-# calles son anchas. Mejora candidata: A* por la grilla.
 # =========================================================
 
 import random
@@ -33,6 +31,7 @@ from .settings import (
     COLOR_BALA, COLOR_VIDA, COLOR_VIDA_FONDO,
 )
 from .player import mover_con_colisiones
+from .pathfinding import Navegante
 from .sprites import PALETA_INSPECTOR, PALETA_RIVAL, dibujar_personaje
 
 COLOR_PIEL = (196, 164, 120)
@@ -135,6 +134,7 @@ class Enemigo:
         self.velocidad = velocidad
         self.mirando = pygame.Vector2(1, 0)  # hacia dónde mira (para el cono)
         self.muerto = False
+        self.navegante = Navegante()
 
     def recibir_dano(self, dano):
         """Devuelve True si este golpe lo mató."""
@@ -153,6 +153,27 @@ class Enemigo:
             self.mirando = direccion
             mover_con_colisiones(self.pos, self.rect, direccion,
                                  velocidad or self.velocidad, dt, paredes)
+        return distancia
+
+    def _navegar_hacia(self, destino, dt, mapa, paredes, velocidad=None,
+                       movil=False):
+        """Camina hacia el destino siguiendo un camino A* (rodea las
+        manzanas). Si hay línea de visión directa va derecho, que es
+        más natural. Devuelve la distancia REAL al destino final."""
+        centro = pygame.Vector2(self.rect.center)
+        distancia = centro.distance_to(destino)
+        if distancia <= 2:
+            return distancia
+        if hay_linea_de_vision(mapa, self.rect.center, destino):
+            self.navegante.limpiar()
+            self._ir_hacia(destino, dt, paredes, velocidad)
+            return distancia
+        paso = self.navegante.siguiente_paso(dt, mapa, self, destino, movil)
+        if paso is None:
+            # Sin camino: al menos empujar en línea recta (caso raro)
+            self._ir_hacia(destino, dt, paredes, velocidad)
+        else:
+            self._ir_hacia(paso, dt, paredes, velocidad)
         return distancia
 
     def _dibujar_cuerpo(self, superficie, r, color_ropa, color_cabeza):
@@ -179,8 +200,9 @@ class InspectorSanitario(Enemigo):
     VELOCIDAD = 150
     VISION = 190            # px base; crece con el nivel de búsqueda
     MEDIO_ANGULO = 50       # apertura del cono a cada lado (grados)
-    SEGUNDOS_PERDIDA = 3.5  # sin verte mientras persigue → pasa a buscar
-    SEGUNDOS_BUSQUEDA = 6.0
+    SEGUNDOS_PERDIDA = 4.5  # sin verte mientras persigue → pasa a buscar
+    SEGUNDOS_BUSQUEDA = 12.0
+    RADIO_RASTRILLAJE = 6   # tiles alrededor de la última posición vista
 
     def __init__(self, ruta_tiles):
         self.ruta_tiles = ruta_tiles  # se guarda para el respawn
@@ -247,8 +269,8 @@ class InspectorSanitario(Enemigo):
                 self.timer_perdida = 0.0
             else:
                 self.timer_perdida += dt
-            self._ir_hacia(self.ultima_vista, dt, paredes,
-                           self.velocidad * multiplicador)
+            self._navegar_hacia(self.ultima_vista, dt, mapa, paredes,
+                                self.velocidad * multiplicador, movil=ve)
             if self.rect.colliderect(jugador.rect.inflate(8, 8)):
                 return "arresto"
             if self.timer_perdida > self.SEGUNDOS_PERDIDA:
@@ -260,15 +282,17 @@ class InspectorSanitario(Enemigo):
             if ve and en_falta:
                 self._empezar_persecucion(jugador, vendiendo, busqueda)
             else:
-                self._buscar_por_la_zona(dt, paredes)
+                self._rastrillar_zona(dt, mapa, paredes)
                 self.timer_busqueda -= dt
                 if self.timer_busqueda <= 0:
                     self.estado = "patrullar"
+                    self.navegante.limpiar()
 
         elif self.estado == "investigar":
             if ve and en_falta:
                 self._empezar_persecucion(jugador, vendiendo, busqueda)
-            elif self._ir_hacia(self.objetivo_investigar, dt, paredes) < 10:
+            elif self._navegar_hacia(self.objetivo_investigar, dt, mapa,
+                                     paredes) < 10:
                 self.timer_mirar += dt
                 if self.timer_mirar > 2.0:  # miró alrededor y no vio nada
                     self.timer_mirar = 0.0
@@ -277,7 +301,8 @@ class InspectorSanitario(Enemigo):
         else:  # patrullar
             if ve and en_falta:
                 self._empezar_persecucion(jugador, vendiendo, busqueda)
-            elif self._ir_hacia(self.ruta[self.indice], dt, paredes) < 6:
+            elif self._navegar_hacia(self.ruta[self.indice], dt, mapa,
+                                     paredes) < 8:
                 self.indice = (self.indice + 1) % len(self.ruta)
 
         return None
@@ -286,19 +311,35 @@ class InspectorSanitario(Enemigo):
         self.estado = "perseguir"
         self.ultima_vista = pygame.Vector2(jugador.rect.center)
         self.timer_perdida = 0.0
+        self.navegante.limpiar()
         if vendiendo:
             busqueda.reportar("venta", 1, cooldown=6.0)
 
-    def _buscar_por_la_zona(self, dt, paredes):
-        """Va a la última posición vista y después deambula cerca."""
+    def _rastrillar_zona(self, dt, mapa, paredes):
+        """Rastrilla la zona: primero va a la última posición vista y
+        después patea tiles caminables al azar alrededor (con A*, así
+        revisa de verdad en vez de frotarse contra una pared)."""
         if self.ultima_vista is not None:
-            if self._ir_hacia(self.ultima_vista, dt, paredes) < 12:
+            if self._navegar_hacia(self.ultima_vista, dt, mapa, paredes) < 14:
+                self.objetivo_deambulo = None
+                self.ancla_busqueda = pygame.Vector2(self.ultima_vista)
                 self.ultima_vista = None
             return
+        ancla = getattr(self, "ancla_busqueda", None) \
+            or pygame.Vector2(self.rect.center)
         if self.objetivo_deambulo is None or \
-                self._ir_hacia(self.objetivo_deambulo, dt, paredes) < 10:
-            desvio = pygame.Vector2(random.uniform(-90, 90), random.uniform(-90, 90))
-            self.objetivo_deambulo = pygame.Vector2(self.rect.center) + desvio
+                self._navegar_hacia(self.objetivo_deambulo, dt, mapa,
+                                    paredes) < 12:
+            # Elegir un tile caminable al azar cerca del ancla
+            for _ in range(8):
+                col = int(ancla.x // TILE) + random.randint(
+                    -self.RADIO_RASTRILLAJE, self.RADIO_RASTRILLAJE)
+                fila = int(ancla.y // TILE) + random.randint(
+                    -self.RADIO_RASTRILLAJE, self.RADIO_RASTRILLAJE)
+                if not mapa.es_solido_tile(col, fila):
+                    self.objetivo_deambulo = pygame.Vector2(
+                        col * TILE + TILE // 2, fila * TILE + TILE // 2)
+                    break
 
     def dibujar(self, superficie, camara):
         r = camara.aplicar(self.rect)
@@ -310,15 +351,18 @@ class InspectorSanitario(Enemigo):
 # Rival gastronómico
 # ---------------------------------------------------------
 class RivalGastronomico(Enemigo):
-    VIDA = 60
-    VELOCIDAD = 140
-    RANGO_VISTA = 260       # ve en todas direcciones (conoce su territorio)
-    RANGO_DISPARO = 240
+    """Los contrabandistas de la competencia. Desde la Fase 11 son
+    hueso duro: el triple de vida, pegan más fuerte, se mueven de
+    costado mientras tirotean y te cazan con pathfinding."""
+    VIDA = 150
+    VELOCIDAD = 150
+    RANGO_VISTA = 280       # ve en todas direcciones (conoce su territorio)
+    RANGO_DISPARO = 250
     DISTANCIA_COMODA = 170  # no se acerca más que esto para tirotear
-    CADENCIA = 1.3
-    DANO_BALA = 10
-    VELOCIDAD_BALA = 380
-    SEGUNDOS_CAZA = 5.0
+    CADENCIA = 1.1
+    DANO_BALA = 14
+    VELOCIDAD_BALA = 400
+    SEGUNDOS_CAZA = 9.0
 
     def __init__(self, x, y, radio_hogar, zona_id=None):
         super().__init__(x, y, self.VIDA, self.VELOCIDAD)
@@ -330,6 +374,8 @@ class RivalGastronomico(Enemigo):
         self.timer_caza = 0.0
         self.objetivo_deambulo = None
         self.ultima_vista = None
+        self.lado_strafe = random.choice((-1, 1))
+        self.timer_strafe = random.uniform(1.0, 2.0)
 
     def ve_al_jugador(self, jugador, mapa):
         distancia = pygame.Vector2(self.rect.center).distance_to(jugador.rect.center)
@@ -359,11 +405,13 @@ class RivalGastronomico(Enemigo):
             if ve:
                 self.estado = "atacar"
             else:
-                # Va a la última posición conocida y agota la paciencia
-                self._ir_hacia(self.ultima_vista, dt, paredes)
+                # Va a la última posición conocida (rodeando manzanas)
+                # y agota la paciencia
+                self._navegar_hacia(self.ultima_vista, dt, mapa, paredes)
                 self.timer_caza -= dt
                 if self.timer_caza <= 0:
                     self.estado = "deambular"
+                    self.navegante.limpiar()
 
         else:  # deambular
             if ve:
@@ -374,7 +422,8 @@ class RivalGastronomico(Enemigo):
         return None
 
     def _combatir(self, dt, jugador, paredes):
-        """Mantiene distancia de tiroteo y dispara con dispersión."""
+        """Mantiene distancia de tiroteo, se mueve de costado para
+        ser difícil de acertar, y dispara con dispersión."""
         hacia = pygame.Vector2(jugador.rect.center) - pygame.Vector2(self.rect.center)
         distancia = hacia.length()
         if distancia > 1:
@@ -382,6 +431,15 @@ class RivalGastronomico(Enemigo):
 
         if distancia > self.DISTANCIA_COMODA:
             self._ir_hacia(jugador.rect.center, dt, paredes)
+        else:
+            # Strafe lateral: cambia de lado cada 1-2 segundos
+            self.timer_strafe -= dt
+            if self.timer_strafe <= 0:
+                self.timer_strafe = random.uniform(1.0, 2.0)
+                self.lado_strafe = -self.lado_strafe
+            lateral = self.mirando.rotate(90 * self.lado_strafe)
+            mover_con_colisiones(self.pos, self.rect, lateral,
+                                 self.velocidad * 0.7, dt, paredes)
 
         if distancia < self.RANGO_DISPARO and self.cooldown_disparo <= 0:
             self.cooldown_disparo = self.CADENCIA
@@ -411,13 +469,19 @@ class RivalGastronomico(Enemigo):
 # ---------------------------------------------------------
 # Rutas de patrulla disponibles (en tiles). Desde la Fase 5 los
 # inspectores NO viven en el mapa: llegan cuando hay denuncias y
-# se retiran cuando la búsqueda vuelve a cero.
+# se retiran cuando la búsqueda vuelve a cero. Con el mapa de la
+# Fase 11 hay rutas también en el Barrio Este y la Zona Sur.
 RUTAS_INSPECTORES = [
     [(2, 9), (29, 9), (29, 18), (2, 18)],      # avenida norte
     [(15, 17), (43, 17), (43, 26), (15, 26)],  # centro / almacén
     [(1, 25), (43, 25), (43, 34), (1, 34)],    # anillo del centro-sur
     [(1, 33), (43, 33), (43, 42), (1, 42)],    # sur / terminal vieja
     [(1, 47), (33, 47), (33, 53), (1, 53)],    # distrito sur / galpones
+    [(76, 9), (110, 9), (110, 25), (76, 25)],  # barrio este norte
+    [(76, 33), (117, 33), (117, 51), (76, 51)],  # barrio este sur
+    [(2, 58), (100, 58), (100, 65), (2, 65)],  # feria del sur
+    [(2, 75), (110, 75), (110, 88), (2, 88)],  # industrial / barrio bajo
+    [(2, 93), (115, 93), (115, 94), (2, 94)],  # muelle nuevo
 ]
 
 
@@ -442,12 +506,14 @@ def crear_inspectores(cantidad=None, cerca_de=None):
 
 
 def crear_rivales():
-    """Tres competidores, cada uno dueño de una zona con franquicia
-    en venta: el baldío del mercado, el campo y el baldío sur. El
-    zona_id los ata a su puesto (eliminarlos abre la compra)."""
+    """Los contrabandistas de cada zona con franquicia en venta.
+    El zona_id los ata a su puesto (eliminarlos abre la compra).
+    La Fase 11 suma la Feria del Sur y el Muelle Nuevo."""
     return [
         RivalGastronomico(23 * TILE, 22 * TILE, radio_hogar=3 * TILE, zona_id="mercado"),
         RivalGastronomico(52 * TILE, 21 * TILE, radio_hogar=4 * TILE, zona_id="campo"),
         RivalGastronomico(36 * TILE, 36 * TILE, radio_hogar=3 * TILE, zona_id="sur"),
         RivalGastronomico(44 * TILE, 50 * TILE, radio_hogar=4 * TILE, zona_id="puerto"),
+        RivalGastronomico(48 * TILE, 62 * TILE, radio_hogar=4 * TILE, zona_id="feria"),
+        RivalGastronomico(38 * TILE, 94 * TILE, radio_hogar=4 * TILE, zona_id="muelle"),
     ]

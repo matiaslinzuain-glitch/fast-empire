@@ -1,15 +1,16 @@
 # =========================================================
-# FAST EMPIRE — NPCs  [Fase 4]
+# FAST EMPIRE — NPCs  [Fase 11]
 #
 # - ClienteLocal: entra al local, hace fila frente al
 #   mostrador, Walter lo atiende con E, se va a comer a un
 #   costado y sale. Si la fila no avanza se cansa y se va.
-# - CompradorIlegal: aparece en el borde del punto ilegal,
-#   camina hasta Walter, compra un medicamento y desaparece.
-#
-# Los dos caminan en línea recta (el local y los puntos son
-# áreas abiertas); la geometría del local se resuelve con
-# waypoints (puerta → fila → mesa → puerta).
+# - CompradorIlegal: desde la Fase 11 NO aparece de la nada:
+#   te contacta por el celular, acuerdan lugar y hora, y a
+#   esa hora te espera en el punto acordado.
+# - Todos los NPCs tienen vida y se pueden matar. Matar a un
+#   civil es homicidio: búsqueda máxima y la policía te
+#   rastrea activamente (eso lo maneja main.py). Los NPCs
+#   que ven violencia salen corriendo.
 # =========================================================
 
 import random
@@ -19,10 +20,11 @@ import pygame
 from .sprites import paleta_peaton, paleta_encapuchado, dibujar_personaje
 
 VELOCIDAD_PEATON = 85        # px/s, más lento que Walter
+VELOCIDAD_PANICO = 150       # px/s huyendo
 SEGUNDOS_COMIENDO = 5.0
 PACIENCIA_FILA = 30.0        # segundos antes de irse sin comprar
-DISTANCIA_COMPRA = 24        # px al jugador para concretar la compra
-VIDA_COMPRADOR = 30.0        # red de seguridad para despawnear
+DISTANCIA_COMPRA = 30        # px al comprador para concretar el trato
+VIDA_NPC = 30                # puntos de vida de un civil
 
 # Ropa variada para que no parezcan clones
 COLORES_ROPA = [
@@ -38,7 +40,7 @@ COLOR_PLATO = (235, 235, 230)
 
 
 class _Peaton:
-    """Base con movimiento simple hacia un objetivo."""
+    """Base con movimiento simple hacia un objetivo, vida y pánico."""
 
     def __init__(self, x, y, color_ropa):
         self.pos = pygame.Vector2(x, y)
@@ -46,13 +48,23 @@ class _Peaton:
         self.color_ropa = color_ropa
         self.paleta = paleta_peaton(color_ropa)
         self.terminado = False  # marcado para eliminar
+        self.hp = VIDA_NPC
+        self.muerto = False
 
-    def _avanzar_hacia(self, destino, dt):
+    def recibir_dano(self, dano):
+        """Devuelve True si este golpe lo mató."""
+        self.hp -= dano
+        if self.hp <= 0:
+            self.muerto = True
+            self.terminado = True
+        return self.muerto
+
+    def _avanzar_hacia(self, destino, dt, velocidad=VELOCIDAD_PEATON):
         """Da un paso hacia el destino y devuelve la distancia restante."""
         hacia = pygame.Vector2(destino) - pygame.Vector2(self.rect.center)
         distancia = hacia.length()
         if distancia > 1:
-            self.pos += hacia.normalize() * VELOCIDAD_PEATON * dt
+            self.pos += hacia.normalize() * velocidad * dt
             self.rect.topleft = (round(self.pos.x), round(self.pos.y))
         return distancia
 
@@ -65,7 +77,7 @@ class _Peaton:
 
 class ClienteLocal(_Peaton):
     """Cliente del local de comidas. Estados:
-    entrando → cola → comiendo → saliendo."""
+    entrando → cola → comiendo → saliendo (o huyendo, si vio tiros)."""
 
     def __init__(self, entrada, puerta):
         super().__init__(*entrada, random.choice(COLORES_ROPA))
@@ -80,8 +92,19 @@ class ClienteLocal(_Peaton):
         self.timer_comer = 0.0
         self.lugar = None          # dónde come
 
+    def entrar_en_panico(self):
+        """Vio violencia: suelta todo y corre hacia la salida."""
+        if self.estado != "huyendo":
+            self.estado = "huyendo"
+
     def actualizar(self, dt):
         """Devuelve "harto" en el frame en que se cansó de esperar."""
+        if self.estado == "huyendo":
+            # Corre directo a su punto de entrada y desaparece
+            if self._avanzar_hacia(self.salida, dt, VELOCIDAD_PANICO) < 12:
+                self.terminado = True
+            return None
+
         if self.estado == "entrando":
             if self._avanzar_hacia(self.frente_puerta, dt) < 10:
                 self.estado = "cruzando"
@@ -126,7 +149,7 @@ class ClienteLocal(_Peaton):
         self.timer_comer = SEGUNDOS_COMIENDO
 
     def irse(self):
-        if self.estado not in ("saliendo", "yendose", "yendose2"):
+        if self.estado not in ("saliendo", "yendose", "yendose2", "huyendo"):
             self.estado = "saliendo"
 
     def dibujar(self, superficie, camara):
@@ -168,34 +191,42 @@ class Proveedor(_Peaton):
 
 
 class CompradorIlegal(_Peaton):
-    """Comprador del punto ilegal. Prefiere un tipo de medicamento,
-    pero si no hay se lleva el otro (eso lo decide main.py)."""
+    """El comprador de un trato acordado por celular. Entra caminando
+    al lugar de encuentro, espera ahí parado, y si Walter se le acerca
+    con la mercadería el trato se cierra (tecla E). Si lo hacés
+    esperar demasiado o hay lío, se va."""
 
-    def __init__(self, x, y):
+    def __init__(self, x, y, punto_espera):
         super().__init__(x, y, COLOR_CAPUCHA)
         self.paleta = paleta_encapuchado(COLOR_CAPUCHA)
         self.origen = pygame.Vector2(x, y)
-        self.tipo_preferido = random.choice(("med_nat", "med_quim"))
-        self.estado = "acercando"  # acercando | saliendo
-        self.vida = VIDA_COMPRADOR
+        self.punto_espera = pygame.Vector2(punto_espera)
+        self.estado = "acercando"  # acercando | esperando | saliendo
+        self.timer_seguridad = 420.0  # red de seguridad para despawnear
 
-    def actualizar(self, dt, rect_jugador):
-        """Devuelve "compra" en el frame en que llega hasta el jugador."""
-        self.vida -= dt
-        if self.vida <= 0:
+    def actualizar(self, dt):
+        self.timer_seguridad -= dt
+        if self.timer_seguridad <= 0:
             self.terminado = True
-            return None
+            return
 
         if self.estado == "acercando":
-            if self._avanzar_hacia(rect_jugador.center, dt) < DISTANCIA_COMPRA:
-                return "compra"
-        else:  # saliendo
+            if self._avanzar_hacia(self.punto_espera, dt) < 8:
+                self.estado = "esperando"
+        elif self.estado == "saliendo":
             if self._avanzar_hacia(self.origen, dt) < 6:
                 self.terminado = True
-        return None
+        # "esperando": se queda parado mirando el reloj
+
+    def puede_comprar(self, rect_jugador):
+        """True si está esperando y Walter llegó hasta él."""
+        return (self.estado == "esperando"
+                and pygame.Vector2(self.rect.center)
+                .distance_to(rect_jugador.center) < DISTANCIA_COMPRA * 2)
 
     def irse(self):
-        self.estado = "saliendo"
+        if self.estado != "saliendo":
+            self.estado = "saliendo"
 
     def dibujar(self, superficie, camara):
         dibujar_personaje(superficie, camara.aplicar(self.rect),

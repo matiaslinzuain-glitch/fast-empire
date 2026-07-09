@@ -1,20 +1,25 @@
 # =========================================================
-# FAST EMPIRE — Punto de entrada  [Fase 5]
-# Progresión y calidad de vida sobre la Fase 4:
-# - Arrancás SOLO con la comida rápida: los medicamentos se
-#   desbloquean cuando el local factura lo suficiente y "un
-#   proveedor" te contacta.
-# - Los inspectores ya no viven en el mapa: llegan cuando hay
-#   denuncias (vender ilegal, tiros, muertes) y se retiran
-#   cuando la búsqueda vuelve a cero.
-# - Árbol de habilidades (tecla T): 4 ramas, puntos + dinero.
-# - El panel de recursos se oculta/muestra con TAB.
-# - Todos los menús se manejan también con el mouse.
+# FAST EMPIRE — Punto de entrada  [Fase 11]
+# Novedades de la Fase 11:
+# - Mapa gigante (120x100): Barrio Este, Feria del Sur, Zona
+#   Industrial, Barrio Bajo y Muelle Nuevo.
+# - EL CELULAR (tecla C): pedidos, mapa del juego y mensajes.
+#   Los compradores ya no aparecen de la nada: te escriben,
+#   acordás LUGAR y HORA, y a esa hora te esperan.
+# - Reloj de juego (1 seg real = 1 min de juego) en el HUD.
+# - Inventario rápido de 9 módulos + inventario grande (O).
+# - Policía con pathfinding A*: rodea manzanas, rastrilla
+#   zonas y no se queda trabada contra las paredes.
+# - Los NPCs se pueden matar… y la policía investiga los
+#   homicidios A FONDO: búsqueda máxima y rastreo activo.
+# - Resolución 16:9 (960x540): pantalla completa exacta en
+#   1920x1080, sin bordes negros.
 #
-# Estados: menu · opciones · jugando · pausa · tienda ·
-#          pedidos · habilidades
+# Estados: menu · nombre · partidas · opciones · jugando ·
+#   pausa · tienda · celular · inventario · habilidades ·
+#   dialogo · banco · cocina
 #
-# Ejecutar desde esta carpeta:  python3 main.py
+# Ejecutar desde esta carpeta:  python main.py
 # =========================================================
 
 import random
@@ -37,15 +42,17 @@ from src.map import (
 from src.player import Jugador
 from src.camera import Camara
 from src.economy import (
-    Economia, Produccion, Caja, PuntoIlegal, crear_franquicias,
+    Economia, Produccion, Caja, Trato, crear_franquicias,
     PEDIDOS, TIEMPO_ENTREGA, INGREDIENTES_POR_TANDA, NOMBRE_MED,
     PUNTOS_POR_RIVAL, PUNTOS_POR_ESCAPE, UMBRAL_DESBLOQUEO_MEDS,
     INGRESO_FRANQUICIA, INTERVALO_FRANQUICIA, PRECIO_CURACION,
-    DATOS_FRANQUICIAS,
+    DATOS_FRANQUICIAS, CURA_SANGUCHE,
+    MAX_TRATOS_ACTIVOS, MAX_OFERTAS,
 )
 from src.npcs import ClienteLocal, CompradorIlegal, Proveedor
 from src.dialogue import CajaDialogo
 from src.audio import Audio
+from src.tiempo import RelojJuego
 from src import savegame
 from src.enemies import (
     Busqueda, Proyectil, RivalGastronomico,
@@ -53,9 +60,10 @@ from src.enemies import (
 )
 from src.skills import Habilidades
 from src.ui import (
-    HUD, TextoFlotante,
+    HUD, TextoFlotante, HOTBAR,
     MenuPrincipal, PantallaOpciones, MenuPausa,
-    PantallaTienda, PantallaPedidos, PantallaHabilidades, PantallaBanco,
+    PantallaTienda, PantallaCelular, PantallaInventario,
+    PantallaHabilidades, PantallaBanco,
     PantallaCocina, PantallaNombre, PantallaPartidas,
 )
 
@@ -66,11 +74,18 @@ NOMBRES_ZONA = {datos[0]: datos[1] for datos in DATOS_FRANQUICIAS}
 RADIO_INTERACCION = TILE * 2
 # Distancia a la que los inspectores escuchan un disparo
 ALCANCE_RUIDO_DISPARO = 340
+# Distancia a la que los NPCs entran en pánico por la violencia
+ALCANCE_PANICO = 300
 RESPAWN_RIVAL = 60
 DURACION_AVISO = 2.6
-MAX_COMPRADORES = 3       # compradores simultáneos en el punto
 SEGUNDOS_RETIRADA = 8.0   # con búsqueda en 0, los inspectores se van
 SEGUNDOS_AUTOSAVE = 60.0  # guardado automático durante la partida
+# Rastreo policial tras un homicidio: cada tanto los inspectores
+# reciben tu posición (los vecinos van pasando el dato)
+SEGUNDOS_RASTREO = 45.0
+INTERVALO_PING_RASTREO = 4.0
+# Cada cuántos segundos reales puede llegar una oferta de trato
+INTERVALO_OFERTA = (45.0, 90.0)
 
 
 class Juego:
@@ -79,8 +94,9 @@ class Juego:
         pygame.mixer.pre_init(22050, -16, 1, 512)
         pygame.init()
         self.pantalla_completa = False
-        # SCALED mantiene la resolución lógica 800x600 y la estira a la
-        # pantalla; el mouse se traduce solo. Fallback por si no existe.
+        # SCALED mantiene la resolución lógica 960x540 (16:9) y la
+        # estira a la pantalla: en un monitor 1080p el fullscreen es
+        # un 2x exacto, sin bordes negros. Fallback por si no existe.
         try:
             self.pantalla = pygame.display.set_mode(
                 (ANCHO_VENTANA, ALTO_VENTANA), pygame.SCALED)
@@ -98,7 +114,8 @@ class Juego:
         self.opciones = PantallaOpciones()
         self.pausa = MenuPausa()
         self.tienda = PantallaTienda()
-        self.telefono = PantallaPedidos()
+        self.celular = PantallaCelular()
+        self.inventario_ui = PantallaInventario()
         self.arbol = PantallaHabilidades()
         self.dialogo = CajaDialogo()
         self.banco_ui = PantallaBanco()
@@ -110,7 +127,6 @@ class Juego:
         self.capa_conos = pygame.Surface((ANCHO_VENTANA, ALTO_VENTANA), pygame.SRCALPHA)
         self.mostrar_panel = True   # TAB lo alterna
         # Modo debug (menú principal): atravesar paredes.
-        # Vive en Juego, no en nueva_partida: sobrevive a las partidas.
         self.debug = False
         # True cuando hay una partida en marcha (para el autosave al salir)
         self.partida_activa = False
@@ -130,6 +146,7 @@ class Juego:
         self.economia = Economia()
         self.produccion = Produccion()
         self.habilidades = Habilidades()
+        self.reloj_juego = RelojJuego()
         self.textos = []
 
         # El local
@@ -139,9 +156,11 @@ class Juego:
         self.pedidos = []             # {"id", "timer"} en camino
         self.cajas = []               # Caja esperando en la puerta
 
-        # El negocio ilegal (dormido hasta charlar con el Proveedor)
-        self.punto = PuntoIlegal()
-        self.compradores = []
+        # El negocio ilegal (dormido hasta charlar con el Proveedor):
+        # tratos acordados por celular en vez de un punto rotativo
+        self.tratos = []               # ofertas + tratos aceptados
+        self.compradores = []          # CompradorIlegal en el mundo
+        self.timer_oferta_trato = random.uniform(*INTERVALO_OFERTA)
         self.proveedor = None          # el NPC, cuando viene de visita
         self.proveedor_visito = False  # ya apareció alguna vez
         self.proveedor_motivo = "intro"  # o "mision"
@@ -160,6 +179,8 @@ class Juego:
         self.inspectores = []
         self.timer_retirada = 0.0
         self.pos_infraccion = None    # dónde fue la última denuncia
+        self.rastreo = 0.0            # rastreo activo tras un homicidio
+        self.timer_ping = 0.0
         self.rivales = crear_rivales()
         self.proyectiles = []
         self.respawns = []            # solo rivales
@@ -199,8 +220,6 @@ class Juego:
             self.corriendo = False
             return
         # Pantalla completa desde cualquier estado: Cmd+F (Mac) o F11.
-        # En macOS F11 suele estar tomado por el sistema, por eso Cmd+F
-        # y las opciones en los menús de pausa y Opciones.
         if evento.type == pygame.KEYDOWN and (
                 evento.key == pygame.K_F11
                 or (evento.key == pygame.K_f and evento.mod & pygame.KMOD_META)):
@@ -300,11 +319,19 @@ class Juego:
                     self._guardar_partida("Partida guardada (F5)")
                 elif evento.key == pygame.K_e:
                     self._interactuar()
+                elif evento.key == pygame.K_c:
+                    self.celular.abrir()
+                    self.estado = "celular"
+                elif evento.key == pygame.K_o:
+                    self.inventario_ui.abrir()
+                    self.estado = "inventario"
                 elif evento.key == pygame.K_t:
                     self.arbol.abrir()
                     self.estado = "habilidades"
                 elif evento.key == pygame.K_TAB:
                     self.mostrar_panel = not self.mostrar_panel
+                elif pygame.K_1 <= evento.key <= pygame.K_9:
+                    self._usar_hotbar(evento.key - pygame.K_1)
             elif evento.type == pygame.MOUSEBUTTONDOWN and evento.button == 1:
                 self._atacar()
 
@@ -333,12 +360,31 @@ class Juego:
                 self.dialogo.abrir("almacenero")
                 self.estado = "dialogo"
 
-        elif self.estado == "pedidos":
-            accion = self.telefono.manejar_evento(evento, self.economia)
+        elif self.estado == "celular":
+            accion = self.celular.manejar_evento(
+                evento, self.economia, self.tratos, self.reloj_juego)
             if accion == "cerrar":
                 self.estado = "jugando"
-            elif isinstance(accion, tuple) and accion[0] == "pedido":
-                self.pedidos.append({"id": accion[1], "timer": TIEMPO_ENTREGA})
+            elif isinstance(accion, tuple):
+                if accion[0] == "pedido":
+                    self.pedidos.append({"id": accion[1],
+                                         "timer": TIEMPO_ENTREGA})
+                elif accion[0] == "aceptar":
+                    self._aceptar_trato(accion[1])
+                elif accion[0] == "rechazar":
+                    self.tratos.remove(accion[1])
+                    self.celular.seleccion = 0
+
+        elif self.estado == "inventario":
+            accion = self.inventario_ui.manejar_evento(
+                evento, self.economia, self.jugador)
+            if accion == "cerrar":
+                self.estado = "jugando"
+            elif isinstance(accion, tuple):
+                if accion[0] == "comer_sanguche":
+                    self.inventario_ui.mensaje = self._comer_sanguche()
+                elif accion[0] == "alternar_arma":
+                    self.inventario_ui.mensaje = self._alternar_arma()
 
         elif self.estado == "habilidades":
             accion = self.arbol.manejar_evento(
@@ -362,6 +408,40 @@ class Juego:
             elif isinstance(accion, tuple) and accion[0] == "cocinar":
                 if self.produccion.iniciar(self.economia, accion[1]):
                     self.estado = "jugando"
+
+    def _usar_hotbar(self, indice):
+        """Teclas 1-9: usar el módulo del inventario rápido."""
+        id_item = HOTBAR[indice]
+        if id_item == "arma":
+            mensaje = self._alternar_arma()
+            if mensaje:
+                self._texto_sobre_jugador(mensaje, COLOR_ORO)
+        elif id_item == "sanguche":
+            mensaje = self._comer_sanguche()
+            if mensaje:
+                self._texto_sobre_jugador(
+                    mensaje, COLOR_DINERO if "vida" in mensaje else COLOR_ERROR)
+        elif id_item == "celular":
+            self.celular.abrir()
+            self.estado = "celular"
+
+    def _alternar_arma(self):
+        if not self.economia.tiene_pistola:
+            return "No tenés pistola — se compra en el almacén"
+        self.economia.arma_equipada = not self.economia.arma_equipada
+        return ("Pistola en mano" if self.economia.arma_equipada
+                else "Pistola guardada (a los puños)")
+
+    def _comer_sanguche(self):
+        if self.economia.sanguches <= 0:
+            return "No te quedan sanguches"
+        if self.jugador.vida >= self.jugador.vida_max:
+            return "Estás al 100% de vida"
+        self.economia.sanguches -= 1
+        self.jugador.vida = min(self.jugador.vida_max,
+                                self.jugador.vida + CURA_SANGUCHE)
+        self.audio.reproducir("cocinado")
+        return f"+{CURA_SANGUCHE} de vida"
 
     def _alternar_debug(self):
         """Prende/apaga el noclip y sincroniza las etiquetas de los
@@ -397,7 +477,7 @@ class Juego:
         if id_dialogo == "proveedor_intro":
             self.economia.meds_desbloqueados = True
             self.aviso = ("NEGOCIO ABIERTO",
-                          "Medicamentos en el teléfono — seguí la marca violeta")
+                          "Los compradores te van a escribir al celular (C)")
             self.aviso_timer = 3.2
             if self.proveedor is not None:
                 self.proveedor.irse()
@@ -429,17 +509,17 @@ class Juego:
         if tipo == "reparto":
             n = random.randint(3, 5)
             return {"tipo": tipo, "objetivo": n, "progreso": 0,
-                    "timer": 60 + 30 * n, "recompensa": 30 * n, "puntos": n,
-                    "desc": f"Vendé {n} medicamentos en el punto"}
+                    "timer": 90 + 45 * n, "recompensa": 30 * n, "puntos": n,
+                    "desc": f"Vendé {n} medicamentos en tratos"}
         if tipo == "quimicos":
             n = random.randint(2, 4)
             return {"tipo": tipo, "objetivo": n, "progreso": 0,
-                    "timer": 60 + 35 * n, "recompensa": 55 * n, "puntos": 2 * n,
+                    "timer": 90 + 50 * n, "recompensa": 55 * n, "puntos": 2 * n,
                     "desc": f"Vendé {n} medicamentos QUÍMICOS"}
         zona = random.choice(zonas_vivas)
         return {"tipo": "limpieza", "zona": zona, "objetivo": 1, "progreso": 0,
-                "timer": 120, "recompensa": 200, "puntos": 8,
-                "desc": f"Eliminá al rival de {NOMBRES_ZONA[zona]}"}
+                "timer": 150, "recompensa": 200, "puntos": 8,
+                "desc": f"Eliminá al contrabandista de {NOMBRES_ZONA[zona]}"}
 
     def _avanzar_mision(self, cantidad=1):
         """Suma progreso y resuelve la misión si se completó."""
@@ -487,6 +567,116 @@ class Juego:
                     "El Proveedor volvió — tiene un trabajo", COLOR_PUNTO)
 
     # -----------------------------------------------------
+    # Tratos por celular (el negocio ilegal de la Fase 11)
+    # -----------------------------------------------------
+    def _tratos_aceptados(self):
+        return [t for t in self.tratos if t.estado in ("aceptado", "encuentro")]
+
+    def _proximo_trato(self):
+        """El trato más urgente para el banner del HUD."""
+        activos = self._tratos_aceptados()
+        if not activos:
+            return None
+        encuentros = [t for t in activos if t.estado == "encuentro"]
+        if encuentros:
+            return encuentros[0]
+        return min(activos, key=lambda t: t.minuto_cita)
+
+    def _aceptar_trato(self, trato):
+        if len(self._tratos_aceptados()) >= MAX_TRATOS_ACTIVOS:
+            self.celular.mensaje = "Demasiados tratos abiertos."
+            self.celular.color_mensaje = COLOR_ERROR
+            return
+        trato.estado = "aceptado"
+        self.celular.seleccion = 0
+        self.audio.reproducir("click")
+
+    def _actualizar_tratos(self, dt):
+        """Genera ofertas, maneja las citas y a los compradores."""
+        if not self.economia.meds_desbloqueados:
+            return
+        ahora = self.reloj_juego.minuto_total
+
+        # Ofertas nuevas cada tanto (si hay lugar)
+        self.timer_oferta_trato -= dt
+        if self.timer_oferta_trato <= 0:
+            self.timer_oferta_trato = random.uniform(*INTERVALO_OFERTA)
+            ofertas = sum(1 for t in self.tratos if t.estado == "oferta")
+            if (ofertas < MAX_OFERTAS
+                    and len(self._tratos_aceptados()) < MAX_TRATOS_ACTIVOS):
+                self.tratos.append(Trato(self.reloj_juego))
+                self.audio.reproducir("pedido")
+                self._texto_sobre_jugador(
+                    "Mensaje nuevo en el celular (C)", COLOR_PUNTO)
+
+        for trato in list(self.tratos):
+            if trato.estado == "oferta":
+                if ahora >= trato.minuto_expira:
+                    self.tratos.remove(trato)
+            elif trato.estado == "aceptado":
+                if ahora >= trato.hora_llegada():
+                    # El comprador entra caminando al punto
+                    x, y = trato.punto_spawn()
+                    comprador = CompradorIlegal(x, y, trato.punto_espera())
+                    comprador.trato = trato
+                    trato.comprador = comprador
+                    self.compradores.append(comprador)
+                    trato.estado = "encuentro"
+            elif trato.estado == "encuentro":
+                if ahora >= trato.hora_limite():
+                    # Se cansó de esperarte
+                    comprador = getattr(trato, "comprador", None)
+                    if comprador is not None:
+                        comprador.irse()
+                    self.tratos.remove(trato)
+                    self._texto_sobre_jugador(
+                        f"El trato de {trato.nombre_lugar} se cayó",
+                        COLOR_ERROR)
+
+        for comprador in self.compradores:
+            comprador.actualizar(dt)
+        self.compradores = [c for c in self.compradores if not c.terminado]
+
+    def _comprador_para_entregar(self):
+        """El comprador de un trato listo para cerrar, si Walter está
+        al lado."""
+        for comprador in self.compradores:
+            trato = getattr(comprador, "trato", None)
+            if (trato is not None and trato.estado == "encuentro"
+                    and comprador.puede_comprar(self.jugador.rect)):
+                return comprador
+        return None
+
+    def _entregar_trato(self, comprador):
+        """Cierra el trato: entrega la mercadería y cobra."""
+        trato = comprador.trato
+        vendidas, cobrado = self.economia.vender_trato(
+            trato.tipo, trato.cantidad, trato.precio_unit)
+        if vendidas == 0:
+            self._texto_sobre_jugador(
+                f"No tenés {NOMBRE_MED[trato.tipo]} encima", COLOR_ERROR)
+            return
+        self.tratos.remove(trato)
+        comprador.irse()
+        self.audio.reproducir("venta")
+        completo = vendidas == trato.cantidad
+        texto = f"+${cobrado} ({vendidas} {NOMBRE_MED[trato.tipo]})"
+        if not completo:
+            texto += " — entrega incompleta"
+        self.textos.append(TextoFlotante(
+            comprador.rect.centerx, comprador.rect.top - 10, texto,
+            COLOR_DINERO if completo else COLOR_ORO))
+        # Vender sigue siendo ilegal: los vecinos denuncian
+        self._reportar_infraccion("venta_ilegal", 1, 15.0,
+                                  comprador.rect.center)
+        # Progreso de misiones de venta
+        if self.mision is not None:
+            if self.mision["tipo"] == "reparto":
+                self._avanzar_mision(vendidas)
+            elif self.mision["tipo"] == "quimicos" and trato.tipo == "med_quim":
+                self._avanzar_mision(vendidas)
+
+    # -----------------------------------------------------
     # Interacción con E (en orden de prioridad)
     # -----------------------------------------------------
     def _interactuar(self):
@@ -495,6 +685,10 @@ class Juego:
                                 "mision": "proveedor_mision",
                                 "receta": "proveedor_receta"}[self.proveedor_motivo])
             self.estado = "dialogo"
+            return
+        comprador = self._comprador_para_entregar()
+        if comprador is not None:
+            self._entregar_trato(comprador)
             return
         if self._cerca_de(self.mapa.tiles_tienda):
             self.tienda.abrir()
@@ -508,8 +702,8 @@ class Juego:
             self._curarse_en_clinica()
             return
         if self._cerca_de(self.mapa.tiles_telefono):
-            self.telefono.abrir()
-            self.estado = "pedidos"
+            self.celular.abrir()
+            self.estado = "celular"
             return
         caja = self._caja_cerca()
         if caja is not None:
@@ -632,7 +826,7 @@ class Juego:
         """Convoca inspectores cuando hay búsqueda activa y los retira
         cuando la zona se enfría."""
         if self.busqueda.nivel >= 1 and not self.inspectores:
-            cantidad = min(2 + self.busqueda.nivel // 2, 5)
+            cantidad = min(2 + self.busqueda.nivel, 6)
             self.inspectores = crear_inspectores(cantidad, self.pos_infraccion)
             if self.pos_infraccion is not None:
                 for inspector in self.inspectores:
@@ -645,16 +839,51 @@ class Juego:
             self.timer_retirada += dt
             if self.timer_retirada >= SEGUNDOS_RETIRADA:
                 self.inspectores = []
+                self.rastreo = 0.0
                 self._texto_sobre_jugador(
                     "La zona se enfrió: los inspectores se retiraron", COLOR_ORO)
         else:
             self.timer_retirada = 0.0
 
+    def _actualizar_rastreo(self, dt):
+        """Después de un homicidio la policía te rastrea ACTIVAMENTE:
+        cada tanto todos los inspectores reciben tu posición (los
+        vecinos van pasando el dato). Escaparse es difícil."""
+        if self.rastreo <= 0:
+            return
+        self.rastreo -= dt
+        self.timer_ping -= dt
+        if self.timer_ping <= 0:
+            self.timer_ping = INTERVALO_PING_RASTREO
+            for inspector in self.inspectores:
+                inspector.alertar(self.jugador.rect.center)
+            self.pos_infraccion = pygame.Vector2(self.jugador.rect.center)
+
+    def _panico_alrededor(self, posicion):
+        """Los NPCs que andan cerca de la violencia salen corriendo."""
+        centro = pygame.Vector2(posicion)
+        for cliente in self.fila + self.comensales:
+            if centro.distance_to(cliente.rect.center) < ALCANCE_PANICO:
+                cliente.entrar_en_panico()
+        # La fila se vacía: los que huyen ya no esperan
+        huidos = [c for c in self.fila if c.estado == "huyendo"]
+        for cliente in huidos:
+            self.fila.remove(cliente)
+            self.comensales.append(cliente)
+        for comprador in self.compradores:
+            if centro.distance_to(comprador.rect.center) < ALCANCE_PANICO:
+                comprador.irse()
+
     # -----------------------------------------------------
     # Combate
     # -----------------------------------------------------
+    def _npcs_atacables(self):
+        """Todos los NPCs con vida (Fase 11: también se pueden matar)."""
+        return self.fila + self.comensales + self.compradores
+
     def _atacar(self):
-        if self.economia.tiene_pistola:
+        usa_pistola = self.economia.tiene_pistola and self.economia.arma_equipada
+        if usa_pistola:
             if self.jugador.cooldown_disparo > 0:
                 return
             if self.economia.balas <= 0:
@@ -689,12 +918,18 @@ class Juego:
                     self._reportar_infraccion("agresion", 2, 3.0,
                                               self.jugador.rect.center)
                 self._danar_enemigo(enemigo, DANO_GOLPE)
+                return
+        for npc in self._npcs_atacables():
+            if punto.distance_to(npc.rect.center) < ALCANCE_GOLPE:
+                self._danar_npc(npc, DANO_GOLPE)
+                return
 
     def _alertar_disparo(self):
-        """Los tiros generan denuncias siempre, y los inspectores que
-        andan cerca van a investigar el lugar."""
+        """Los tiros generan denuncias siempre, los inspectores que
+        andan cerca investigan y los vecinos salen corriendo."""
         centro = self.jugador.rect.center
         self._reportar_infraccion("disparo", 1, 6.0, centro)
+        self._panico_alrededor(centro)
         for inspector in self.inspectores:
             if pygame.Vector2(inspector.rect.center).distance_to(centro) \
                     < ALCANCE_RUIDO_DISPARO:
@@ -710,11 +945,46 @@ class Juego:
         else:
             self._matar_inspector(enemigo)
 
+    def _danar_npc(self, npc, dano):
+        """Golpear civiles también es delito; matarlos es homicidio."""
+        self.textos.append(TextoFlotante(
+            npc.rect.centerx, npc.rect.top - 8, f"-{dano}", COLOR_ERROR))
+        if hasattr(npc, "entrar_en_panico"):
+            npc.entrar_en_panico()
+            if npc in self.fila:
+                self.fila.remove(npc)
+                self.comensales.append(npc)
+        else:
+            npc.irse()
+        self._reportar_infraccion("agresion_civil", 1, 4.0,
+                                  self.jugador.rect.center)
+        if npc.recibir_dano(dano):
+            self._matar_civil(npc)
+
+    def _matar_civil(self, npc):
+        """Homicidio: la infracción más grave. Búsqueda al máximo y la
+        policía te rastrea activamente un buen rato — son MUY
+        detallistas con los homicidios."""
+        trato = getattr(npc, "trato", None)
+        if trato is not None and trato in self.tratos:
+            self.tratos.remove(trato)
+        self.busqueda.maximo()
+        self.pos_infraccion = pygame.Vector2(npc.rect.center)
+        self.rastreo = SEGUNDOS_RASTREO
+        self.timer_ping = 0.0
+        self._panico_alrededor(npc.rect.center)
+        self.audio.reproducir("caida")
+        self.textos.append(TextoFlotante(
+            npc.rect.centerx, npc.rect.top - 8,
+            "¡HOMICIDIO! La policía te busca por cielo y tierra",
+            COLOR_ERROR))
+
     def _matar_rival(self, rival):
         botin = random.randint(50, 100)
         self.economia.dinero += botin
         self.economia.puntos += PUNTOS_POR_RIVAL
         self._reportar_infraccion("homicidio", 1, 2.0, rival.rect.center)
+        self._panico_alrededor(rival.rect.center)
         self.textos.append(TextoFlotante(
             rival.rect.centerx, rival.rect.top - 8,
             f"Rival eliminado: +${botin}, +{PUNTOS_POR_RIVAL} pts", COLOR_ORO))
@@ -735,6 +1005,8 @@ class Juego:
     def _matar_inspector(self, inspector):
         self.busqueda.maximo()
         self.pos_infraccion = pygame.Vector2(inspector.rect.center)
+        self.rastreo = SEGUNDOS_RASTREO
+        self.timer_ping = 0.0
         self.textos.append(TextoFlotante(
             inspector.rect.centerx, inspector.rect.top - 8,
             "¡Eliminaste a un inspector! Búsqueda máxima", COLOR_ERROR))
@@ -766,7 +1038,12 @@ class Juego:
         self.busqueda.reiniciar()
         self.inspectores = []
         self.timer_retirada = 0.0
+        self.rastreo = 0.0
         self.proyectiles.clear()
+        # Los tratos con encuentro en curso se caen
+        for trato in list(self.tratos):
+            if trato.estado == "encuentro":
+                self.tratos.remove(trato)
         for comprador in self.compradores:
             comprador.irse()
         self.habia_persecucion = False
@@ -778,13 +1055,16 @@ class Juego:
     # Lógica del estado "jugando"
     # -----------------------------------------------------
     def _actualizar_jugando(self, dt):
+        self.reloj_juego.actualizar(dt)
+
         # Apuntado con mouse (pasado a coordenadas de mundo)
         mouse = pygame.Vector2(pygame.mouse.get_pos()) + self.camara.offset
         mira = mouse - pygame.Vector2(self.jugador.rect.center)
         if mira.length_squared() > 0:
             self.jugador.direccion_mira = mira.normalize()
         self.jugador.apuntando = (pygame.mouse.get_pressed()[2]
-                                  and self.economia.tiene_pistola)
+                                  and self.economia.tiene_pistola
+                                  and self.economia.arma_equipada)
 
         # Habilidad "Pies ligeros"
         self.jugador.velocidad = VELOCIDAD_JUGADOR * self.habilidades.velocidad_mult()
@@ -832,6 +1112,7 @@ class Juego:
                 self.proveedor = None
 
         self._actualizar_mision(dt)
+        self._actualizar_tratos(dt)
 
         # Guardado automático
         self.timer_autosave -= dt
@@ -849,9 +1130,11 @@ class Juego:
                 self._texto_sobre_jugador(
                     f"+${ganancia} de tus franquicias", COLOR_DINERO)
 
-        vendiendo_ilegal = self._actualizar_punto(dt)
+        # ¿Estás cerrando un trato a la vista de la ley?
+        vendiendo_ilegal = (self._comprador_para_entregar() is not None
+                            and self.economia.tiene_meds())
 
-        # Inspectores (si es que hay): la infracción es el punto ilegal
+        # Inspectores (si es que hay)
         for inspector in self.inspectores:
             resultado = inspector.actualizar(
                 dt, self.jugador, self.mapa,
@@ -877,14 +1160,23 @@ class Juego:
             if bala.muerto:
                 continue
             if bala.del_jugador:
+                impactado = False
                 for enemigo in self.inspectores + self.rivales:
                     if enemigo.rect.collidepoint(bala.pos):
                         bala.muerto = True
+                        impactado = True
                         if enemigo in self.inspectores:
                             self._reportar_infraccion(
                                 "agresion", 2, 3.0, self.jugador.rect.center)
                         self._danar_enemigo(enemigo, bala.dano)
                         break
+                if not impactado:
+                    # Las balas también lastiman a los NPCs (Fase 11)
+                    for npc in self._npcs_atacables():
+                        if npc.rect.collidepoint(bala.pos):
+                            bala.muerto = True
+                            self._danar_npc(npc, bala.dano)
+                            break
             elif self.jugador.rect.collidepoint(bala.pos):
                 bala.muerto = True
                 self.audio.reproducir("dano")
@@ -897,14 +1189,19 @@ class Juego:
         self.proyectiles = [b for b in self.proyectiles if not b.muerto]
         self.inspectores = [i for i in self.inspectores if not i.muerto]
         self.rivales = [r for r in self.rivales if not r.muerto]
+        self.fila = [c for c in self.fila if not c.terminado]
+        self.comensales = [c for c in self.comensales if not c.terminado]
+        self.compradores = [c for c in self.compradores if not c.terminado]
 
         self._actualizar_respawns(dt)
 
-        # Búsqueda: decae más rápido con "Fantasma"
+        # Búsqueda: decae más rápido con "Fantasma" (pero no mientras
+        # la policía te está rastreando por un homicidio)
         persiguiendo = any(i.estado in ("perseguir", "buscar")
-                           for i in self.inspectores)
+                           for i in self.inspectores) or self.rastreo > 0
         self.busqueda.actualizar(dt, persiguiendo, self.habilidades.calma_mult())
         self._actualizar_presencia_policial(dt)
+        self._actualizar_rastreo(dt)
         if self.habia_persecucion and not persiguiendo:
             self.economia.puntos += PUNTOS_POR_ESCAPE
             self._texto_sobre_jugador(
@@ -965,60 +1262,6 @@ class Juego:
                 x + 10, PUNTO_ENTREGA[1] - 12, "¡Llegó tu pedido!", COLOR_ORO))
         self.pedidos = pendientes
 
-    def _actualizar_punto(self, dt):
-        """Punto ilegal y sus compradores (solo con el proveedor
-        desbloqueado). Devuelve si estás vendiendo (infracción)."""
-        if not self.economia.meds_desbloqueados:
-            return False
-        vendiendo = (self.punto.contiene(self.jugador.rect)
-                     and self.economia.tiene_meds())
-        evento = self.punto.actualizar(dt, vendiendo)
-        if evento == "mudanza":
-            for comprador in self.compradores:
-                comprador.irse()
-            self.audio.reproducir("mudanza")
-            self._texto_sobre_jugador(
-                f"El punto se mudó: {self.punto.nombre}", COLOR_PUNTO)
-        elif evento == "spawn":
-            activos = sum(1 for c in self.compradores if c.estado == "acercando")
-            if activos < MAX_COMPRADORES:
-                x, y = self.punto.punto_spawn()
-                self.compradores.append(CompradorIlegal(x, y))
-
-        for comprador in self.compradores:
-            if comprador.estado == "acercando" and not vendiendo:
-                comprador.irse()
-            if comprador.actualizar(dt, self.jugador.rect) == "compra":
-                self._vender_med_a(comprador)
-                comprador.irse()
-        self.compradores = [c for c in self.compradores if not c.terminado]
-        return vendiendo
-
-    def _vender_med_a(self, comprador):
-        """Le vende el tipo que prefiere; si no hay, el otro. Cada venta
-        genera denuncias de vecinos (así llega la policía)."""
-        tipo = comprador.tipo_preferido
-        stock = {"med_nat": self.economia.med_nat,
-                 "med_quim": self.economia.med_quim}
-        if stock[tipo] == 0:
-            tipo = "med_quim" if tipo == "med_nat" else "med_nat"
-        if stock[tipo] == 0:
-            return
-        precio = self.economia.vender_med(tipo)
-        self.punto.registrar_venta()
-        self.audio.reproducir("venta")
-        self._reportar_infraccion("venta_ilegal", 1, 15.0,
-                                  comprador.rect.center)
-        self.textos.append(TextoFlotante(
-            comprador.rect.centerx, comprador.rect.top - 10,
-            f"+${precio} ({NOMBRE_MED[tipo]})", COLOR_DINERO))
-        # Progreso de misiones de venta
-        if self.mision is not None:
-            if self.mision["tipo"] == "reparto":
-                self._avanzar_mision()
-            elif self.mision["tipo"] == "quimicos" and tipo == "med_quim":
-                self._avanzar_mision()
-
     def _actualizar_respawns(self, dt):
         """Los rivales eliminados vuelven con gente nueva."""
         pendientes = []
@@ -1038,6 +1281,11 @@ class Juego:
     def _pista_interaccion(self):
         if self._proveedor_cerca():
             return "E — Hablar con el desconocido"
+        comprador = self._comprador_para_entregar()
+        if comprador is not None:
+            trato = comprador.trato
+            return (f"E — Entregar {trato.cantidad} {NOMBRE_MED[trato.tipo]} "
+                    f"(${trato.total})")
         franquicia = self._franquicia_cerca()
         if franquicia is not None:
             if franquicia.comprada:
@@ -1055,7 +1303,7 @@ class Juego:
                 return f"E — Clínica: curación completa (${PRECIO_CURACION})"
             return "La clínica del barrio (estás sano)"
         if self._cerca_de(self.mapa.tiles_telefono):
-            return "E — Hacer un pedido por teléfono"
+            return "E — Usar el celular del local"
         caja = self._caja_cerca()
         if caja is not None:
             return f"E — Levantar caja: {caja.nombre}"
@@ -1069,10 +1317,6 @@ class Juego:
             if self.economia.receta_especial:
                 return "E — Cocinar (elegí la receta)"
             return f"E — Cocinar tanda ({INGREDIENTES_POR_TANDA} ingredientes)"
-        if self.economia.meds_desbloqueados and \
-                self.punto.contiene(self.jugador.rect) and \
-                not self.economia.tiene_meds():
-            return "Acá se venden medicamentos — pedilos por teléfono"
         return None
 
     # -----------------------------------------------------
@@ -1096,8 +1340,14 @@ class Juego:
                 self.pausa.dibujar(self.pantalla)
             elif self.estado == "tienda":
                 self.tienda.dibujar(self.pantalla, self.economia, self.jugador)
-            elif self.estado == "pedidos":
-                self.telefono.dibujar(self.pantalla, self.economia)
+            elif self.estado == "celular":
+                self.celular.dibujar(
+                    self.pantalla, self.economia, self.tratos,
+                    self.reloj_juego, self.mapa, self.jugador,
+                    self.franquicias)
+            elif self.estado == "inventario":
+                self.inventario_ui.dibujar(self.pantalla, self.economia,
+                                           self.jugador)
             elif self.estado == "habilidades":
                 self.arbol.dibujar(self.pantalla, self.economia, self.habilidades)
             elif self.estado == "dialogo":
@@ -1110,9 +1360,7 @@ class Juego:
     def _dibujar_mundo(self):
         self.pantalla.fill(COLOR_FONDO)
         self.mapa.dibujar(self.pantalla, self.camara)
-        meds_ok = self.economia.meds_desbloqueados
-        if meds_ok:
-            self._dibujar_punto()
+        self._dibujar_encuentros()
         self._dibujar_conos()
         for franquicia in self.franquicias:
             franquicia.dibujar(self.pantalla, self.camara)
@@ -1126,6 +1374,8 @@ class Juego:
                 self._signo(self.proveedor, "!", COLOR_PUNTO)
         for comprador in self.compradores:
             comprador.dibujar(self.pantalla, self.camara)
+            if comprador.estado == "esperando":
+                self._signo(comprador, "$", COLOR_PUNTO)
         for enemigo in self.inspectores + self.rivales:
             enemigo.dibujar(self.pantalla, self.camara)
         self.jugador.dibujar(self.pantalla, self.camara)
@@ -1134,13 +1384,13 @@ class Juego:
         for texto in self.textos:
             texto.dibujar(self.pantalla, self.camara, self.fuente_mundo)
         self._dibujar_alertas_enemigos()
-        if meds_ok:
-            self._dibujar_flecha_punto()
+        self._dibujar_flecha_encuentro()
         self.hud.dibujar(
             self.pantalla, self.jugador, self.economia, self.produccion,
-            self.punto, self.punto.contiene(self.jugador.rect),
+            self.reloj_juego, self._proximo_trato(),
             self._pista_interaccion(), self.busqueda, self.pedidos,
-            round(self.reloj.get_fps()), self.mostrar_panel, self.mision)
+            round(self.reloj.get_fps()), self.mostrar_panel, self.mision,
+            sin_leer=sum(1 for t in self.tratos if t.estado == "oferta"))
         if self.aviso:
             self.hud.dibujar_aviso(self.pantalla, *self.aviso)
         if self.debug:
@@ -1148,20 +1398,29 @@ class Juego:
                 "DEBUG · atravesás paredes", True, COLOR_ERROR)
             self.pantalla.blit(etiqueta, (8, ALTO_VENTANA - 24))
 
-    def _dibujar_punto(self):
-        rect = self.camara.aplicar(self.punto.rect)
-        if not rect.colliderect(self.pantalla.get_rect()):
-            return
-        velo = pygame.Surface(rect.size, pygame.SRCALPHA)
-        velo.fill((*COLOR_PUNTO, 22))
-        self.pantalla.blit(velo, rect)
-        pygame.draw.rect(self.pantalla, COLOR_PUNTO, rect, 1)
-        etiqueta = self.fuente_mundo.render(self.punto.nombre, True, COLOR_PUNTO)
-        self.pantalla.blit(etiqueta, (rect.x + 5, rect.y + 4))
+    def _dibujar_encuentros(self):
+        """Marca violeta sobre la zona del/los tratos en curso."""
+        for trato in self._tratos_aceptados():
+            rect = self.camara.aplicar(trato.rect)
+            if not rect.colliderect(self.pantalla.get_rect()):
+                continue
+            velo = pygame.Surface(rect.size, pygame.SRCALPHA)
+            velo.fill((*COLOR_PUNTO, 20))
+            self.pantalla.blit(velo, rect)
+            pygame.draw.rect(self.pantalla, COLOR_PUNTO, rect, 1)
+            etiqueta = self.fuente_mundo.render(
+                f"{trato.nombre_lugar} — "
+                f"{self.reloj_juego.texto_hora(trato.minuto_cita)}",
+                True, COLOR_PUNTO)
+            self.pantalla.blit(etiqueta, (rect.x + 5, rect.y + 4))
 
-    def _dibujar_flecha_punto(self):
+    def _dibujar_flecha_encuentro(self):
+        """Flecha hacia el encuentro activo (o el próximo trato)."""
+        trato = self._proximo_trato()
+        if trato is None:
+            return
         centro_pantalla = pygame.Vector2(ANCHO_VENTANA / 2, ALTO_VENTANA / 2)
-        destino = pygame.Vector2(self.punto.rect.center) - self.camara.offset
+        destino = pygame.Vector2(trato.rect.center) - self.camara.offset
         if self.pantalla.get_rect().collidepoint(destino):
             return
         direccion = destino - centro_pantalla

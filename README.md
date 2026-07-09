@@ -23,11 +23,14 @@ python3 main.py
 |---|---|
 | W A S D | Mover a Walter |
 | Mouse | Apuntar |
-| Click izquierdo | Disparar (con pistola) / golpear (sin arma) |
+| Click izquierdo | Disparar (pistola equipada) / golpear (a los puños) |
 | Click derecho (sostener) | Apuntar con mira: menos dispersión, camina más lento |
-| E | Atender clientes, cocinar, teléfono, levantar cajas, almacén |
+| E | Interactuar: atender, cocinar, cajas, almacén, banco, entregar tratos |
+| **C** | **El celular**: pedidos, mapa del juego y mensajes de tratos |
+| **O** | **Inventario grande** (usar sanguches, equipar arma) |
+| **1-9** | Inventario rápido (1 alterna pistola/puños, 5 come sanguche, 9 celular) |
 | T | Árbol de habilidades |
-| TAB | Mostrar/ocultar el panel de recursos |
+| TAB | Ocultar/mostrar el HUD |
 | F5 | Guardar la partida (también desde el menú de pausa) |
 | Cmd+F o F11 | Pantalla completa / ventana (también en Pausa y Opciones) |
 | ESC | Pausa (en el juego) / volver (en menús) |
@@ -57,32 +60,38 @@ El negocio tiene dos caras:
 4. El juego arranca **solo con la comida rápida**. Cuando el local factura
    $200, **el Proveedor te espera en persona en la puerta** (encapuchado, con
    un "!"). Hablale con E: al terminar la charla se habilitan los
-   **medicamentos naturales** (baratos) y **químicos** (caros) en el
-   teléfono, con packs x3 y x6 mayoristas. No se venden en el mostrador.
-5. Se revenden en el **punto ilegal**, marcado en violeta en el mapa (una
-   flechita en el borde de la pantalla te guía). Compradores encapuchados se
-   acercan de a poco: pocos por tanda, pero pagan mucho más que un plato.
-6. **El punto se muda** cuando se agota la demanda o pasa el tiempo — el HUD
-   siempre muestra dónde está hoy.
-7. **La policía no vive en el mapa**: cada venta ilegal, tiro o muerte genera
-   denuncias de los vecinos. Con la primera denuncia llegan 2–4 inspectores a
-   investigar la zona; si un inspector te ve en el punto con mercadería, te
-   persigue. Arresto = multa del 25% + medicamentos confiscados. Cuando la
-   **BÚSQUEDA** (0–5) vuelve a cero y pasan unos segundos, se retiran.
-8. **Los rivales** (bandana roja) rondan los puntos de venta. Te ignoran
-   hasta que facturás $150 en negro; después te atacan a tiros. La pistola,
-   las balas y el sanguche curativo se compran en el **almacén** (toldo rojo,
-   en el centro del mapa).
+   **medicamentos naturales** (baratos) y **químicos** (caros) en la app
+   Pedidos del celular, con packs x3 y x6 mayoristas.
+5. **Los compradores te escriben al celular** (aparece el aviso y un globito
+   rojo sobre el módulo 9): en la app **Mensajes** ves qué piden, dónde y a
+   qué hora, y cuánto pagan (con sobreprecio por ser venta acordada).
+   **E acepta, X rechaza.** A la hora pactada el comprador te espera en el
+   lugar (zona violeta + flechita + parpadeo en el mapa del celular):
+   acercate y entregale con E. Si llegás tarde o sin stock, el trato se cae.
+6. **El reloj del juego** (arriba al centro) marca las citas: 1 segundo real
+   = 1 minuto de juego. Podés tener hasta 3 tratos abiertos a la vez.
+7. **La policía no vive en el mapa**: cada venta, tiro o muerte genera
+   denuncias. Llegan 3–6 inspectores **con pathfinding de verdad**: rodean
+   manzanas, te persiguen por las calles y rastrillan la zona donde te
+   perdieron. Arresto = multa del 25% + medicamentos confiscados.
+8. **Matar civiles es homicidio**: búsqueda máxima al instante y la policía
+   te **rastrea activamente** un buen rato (los vecinos van pasando el dato
+   de dónde estás). Los NPCs que ven violencia salen corriendo.
+9. **Los contrabandistas rivales** (bandana roja) son duros: mucha vida,
+   pegan fuerte, se mueven de costado en los tiroteos y te cazan por las
+   calles. La pistola, las balas y los sanguches (se guardan en el
+   inventario) se compran en los **almacenes** (toldo rojo).
 
 ### Las franquicias (territorio)
 
-9. Hay **4 puestos en venta**: Mercado ($400), Campo ($550), Sur ($700) y el
-   Depósito del Puerto ($850) — justo en las zonas que vigilan los rivales.
-   Para comprar uno (E sobre el puesto) hay que **eliminar al rival de esa
-   zona y cerrar el trato antes de que llegue su reemplazo** (60 segundos de
-   ventana). Una vez tuyo: el rival no vuelve nunca más y el puesto paga
-   **+$20 cada 30 segundos**, solo. Don Aldo, el almacenero, te cuenta el
-   negocio si charlás con él (opción en el almacén).
+10. Hay **6 puestos en venta**: Mercado ($400), Campo ($550), Sur ($700),
+    Depósito del Puerto ($850), Puesto de la Feria ($950) y Depósito del
+    Muelle ($1100) — justo en las zonas que vigilan los contrabandistas.
+    Para comprar uno (E sobre el puesto) hay que **eliminar al rival de esa
+    zona y cerrar el trato antes de que llegue su reemplazo** (60 segundos de
+    ventana). Una vez tuyo: el rival no vuelve nunca más y el puesto paga
+    **+$20 cada 30 segundos**, solo. Don Aldo, el almacenero, te cuenta el
+    negocio si charlás con él (opción en el almacén).
 
 ### Las misiones del Proveedor
 
@@ -90,22 +99,25 @@ Con el negocio ilegal abierto, el Proveedor **vuelve cada tanto a la puerta
 del local con un trabajo** (si lo ignorás ~35 segundos, se va y tarda más en
 volver). Hablarle asigna una misión con tiempo límite, visible en un banner:
 
-- **Reparto**: vendé 3–5 medicamentos en el punto ($30 y 1 punto por unidad).
+- **Reparto**: vendé 3–5 medicamentos en tratos ($30 y 1 punto por unidad).
 - **Pedido exigente**: vendé 2–4 **químicos** ($55 y 2 puntos por unidad).
-- **Limpieza**: eliminá al rival de una zona puntual ($200 y 8 puntos).
+- **Limpieza**: eliminá al contrabandista de una zona ($200 y 8 puntos).
 
 Fallar no castiga, pero el próximo trabajo tarda más. **La primera misión
 cumplida paga distinto**: el Proveedor vuelve en persona a enseñarte su
 Receta Especial.
 
-### El Distrito Sur (servicios)
+### La ciudad (distritos y servicios)
 
-10. Al sur de la terminal vieja se abre el distrito industrial: el **Banco**
+11. Al sur de la terminal vieja está el distrito de servicios: el **Banco**
     (franja dorada) — lo que depositás **no se pierde en arrestos ni
     muertes**, que solo tocan tu efectivo —, la **Clínica** (cruz roja) con
-    curación completa por $50, un **segundo almacén**, y los galpones del
-    puerto. El **arroyo** cruza el este del mapa con dos puentes; del otro
-    lado, la Costanera.
+    curación completa por $50, un **segundo almacén** y los galpones del
+    puerto. Más allá, la ciudad sigue: el **Barrio Este** (con su plaza, la
+    Galería Muerta y un tercer almacén), la **Feria del Sur**, la **Zona
+    Industrial Nueva**, el **Barrio Bajo** y el **Muelle Nuevo** sobre el
+    mar. El **arroyo** baja de norte a sur con varios puentes. La app Mapa
+    del celular muestra todo.
 
 ## Guardado de partidas
 
@@ -116,10 +128,11 @@ Receta Especial.
 - **Se guarda solo**: cada 60 segundos jugando, al volver al menú principal
   y al cerrar la ventana — siempre en el slot con el que estás jugando.
   **Manual**: F5 o "Guardar partida" en la pausa.
-- Se guarda lo permanente (plata, banco, inventario, habilidades,
-  franquicias con sus rivales eliminados, receta, misiones cumplidas,
-  pedidos en camino, cajas y tu posición). Lo transitorio (persecuciones,
-  clientes, punto ilegal) arranca fresco al cargar.
+- Se guarda lo permanente (plata, banco, inventario, sanguches,
+  habilidades, franquicias con sus rivales eliminados, receta, misiones
+  cumplidas, pedidos en camino, cajas, tu posición, **el reloj de juego y
+  los tratos del celular**). Lo transitorio (persecuciones, clientes)
+  arranca fresco al cargar.
 - Los archivos viven en `partidas/<nombre>.json`. La carpeta está en el
   `.gitignore`: cada jugador tiene sus propias partidas.
 
@@ -137,16 +150,18 @@ partidas nuevas hasta que lo apagues.
 /fast_empire
   main.py            → clase Juego: máquina de estados y game loop
   /src
-    settings.py      → constantes globales: ventana, colores, combate
-    map.py           → mapa 60x45 por piezas validadas, local, colisiones
+    settings.py      → constantes globales: ventana, colores, combate, reloj
+    map.py           → mapa 120x100 por piezas validadas, local, colisiones
     player.py        → Walter: WASD, vida, mira, física compartida
     camera.py        → cámara que sigue al jugador, clampeada al mapa
-    economy.py       → dinero, producción, pedidos, cajas, punto ilegal
-    npcs.py          → clientes del local (fila/comer) y compradores ilegales
+    economy.py       → dinero, producción, pedidos, cajas, tratos del celular
+    npcs.py          → clientes del local (con vida) y compradores de tratos
+    pathfinding.py   → A* por la grilla + Navegante (anti-atascos)
+    tiempo.py        → reloj de juego (1 seg real = 1 min de juego)
     sprites.py       → pixel art procedural: plantillas de texto + paletas
     audio.py         → efectos y música sintetizados (sin archivos)
-    ui.py            → HUD, menús con mouse, almacén, teléfono y árbol
-    enemies.py       → inspectores (convocables), rivales, búsqueda, balas
+    ui.py            → HUD + hotbar, celular, inventario, menús con mouse
+    enemies.py       → inspectores (con A*), contrabandistas, búsqueda, balas
     skills.py        → árbol de habilidades: 4 ramas x 3 nodos
     dialogue.py      → diálogos como datos + caja con máquina de escribir
   /assets
@@ -267,6 +282,47 @@ consecuencias, respawns.
   tener menú de recetas (`PantallaCocina`): Clásica de siempre o Especial
   (5 ingredientes + $15 → calidad 130–160%, precio del plato multiplicado).
   Las habilidades de Cocina aplican a ambas (tandas de 6, cocción rápida).
+
+### Fase 10 ✅ — Guardado de partidas
+
+Hasta 5 slots con nombre (`partidas/*.json`), autosave cada 60s / al salir /
+al cerrar la ventana, F5 manual, pantalla de carga con borrado.
+
+### Fase 11 ✅ — La ciudad grande, el celular y los tratos
+
+- **Mapa 120x100** (3840x3200 px, ~3.7x): la ciudad original quedó intacta y
+  alrededor crecieron el **Barrio Este** (plaza, Galería Muerta, tercer
+  almacén), la **Feria del Sur**, la **Zona Industrial Nueva**, el **Barrio
+  Bajo** y el **Muelle Nuevo** sobre el mar. El campo ganó granjas, granero
+  y huerta (menos pasto vacío). 13 lugares de venta, 6 franquicias con sus
+  6 contrabandistas y 10 rutas de inspectores.
+- **EL CELULAR (tecla C)**: un teléfono de verdad dibujado en pantalla, con
+  barra de estado (hora/señal/batería) y 3 apps — **Pedidos** (las compras
+  de siempre), **Mapa** (el mapa completo del juego con marcadores en vivo)
+  y **Mensajes** (los tratos). El teléfono del local abre lo mismo.
+- **Tratos con lugar y hora**: los compradores ya no aparecen de la nada.
+  Te escriben, aceptás o rechazás, y a la hora pactada (reloj de juego:
+  1 seg real = 1 min) te esperan en el punto. Sobreprecio del 15–45%,
+  hasta 3 tratos abiertos y 2 ofertas en bandeja.
+- **Reloj de juego** en el HUD (Día N · HH:MM), guardado con la partida.
+- **HUD rediseñado**: nada de panelón — vida y plata arriba a la izquierda,
+  reloj al centro, búsqueda a la derecha, y el **inventario rápido de 9
+  módulos** abajo (arma, balas, comida, ingredientes, sanguches, meds,
+  efectivo y celular, con teclas 1-9). **Inventario grande con O**:
+  grilla con descripciones, comer sanguches y equipar/guardar la pistola.
+- **Policía con pathfinding A***: los inspectores rodean manzanas, no se
+  traban contra las paredes (detección de atascos con replaneo) y al
+  perderte **rastrillan la zona** de verdad. Llegan hasta 6.
+- **NPCs matables**: clientes y compradores tienen vida. Matar a un civil
+  es **búsqueda máxima + rastreo activo** (~45s en los que la policía
+  recibe tu posición); los testigos huyen en pánico. Golpear civiles
+  también genera denuncias.
+- **Contrabandistas duros**: 150 de vida (antes 60), balas de 14, strafe
+  lateral en los tiroteos y caza con pathfinding.
+- **Resolución 16:9 (960x540)**: la pantalla completa en un monitor
+  1920x1080 escala 2x EXACTO — sin bordes negros ni imagen estirada.
+- **Sanguches al inventario** (máx. 5): se comen con la tecla 5 o desde el
+  inventario, ya no curan al comprarlos.
 
 ## Roadmap
 

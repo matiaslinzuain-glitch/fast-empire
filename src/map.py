@@ -1,27 +1,26 @@
 # =========================================================
-# FAST EMPIRE — Mapa y colisiones  [Fase 4]
-# El mapa (60x45 tiles = 1920x1440 px) se arma concatenando
-# piezas con nombre: cada fila valida que mida 60 caracteres,
-# así editar una manzana no puede desalinear las colisiones.
+# FAST EMPIRE — Mapa y colisiones  [Fase 11]
+# El mapa creció a 120x100 tiles (3840x3200 px). La ciudad
+# original (columnas 0-74, filas 0-56) se conserva EXACTA
+# para no romper ninguna coordenada del juego; alrededor se
+# suman el Barrio Este, la Feria del Sur, la Zona Industrial
+# Nueva, el Barrio Bajo y el Muelle Nuevo. El campo ganó
+# granjas y arboledas para que no sea solo pasto.
 #
 # Leyenda:
 #   X = edificio / pared (sólido)
 #   H = casa con techo de tejas (sólida)
 #   A = árbol (sólido)
+#   k = kiosco de feria (sólido)
 #   C = cocina de Walter (sólida, interactuable con E)
 #   M = mostrador del local (sólido; se atiende desde atrás con E)
-#   F = teléfono del local (sólido, interactuable: pedidos)
-#   T = almacén del barrio (sólido, interactuable: armas/curas)
+#   F = teléfono del local (sólido, interactuable: abre el celular)
+#   T = almacén (sólido, interactuable: armas/curas)
+#   B = banco  ·  S = clínica  ·  w = agua
 #   p = piso de madera del local (transitable)
 #   . = calle de asfalto (transitable)
 #   , = pasto (transitable)
-#   ~ = camino de tierra (portones al campo, transitable)
-#
-# Distribución: el local de Walter arriba a la izquierda, un
-# parque al norte, manzanas de casas, dos baldíos, la terminal
-# vieja al sur y el campo al este (muro con dos portones).
-# El punto de venta ilegal NO es un tile: rota entre lugares
-# candidatos definidos en economy.py.
+#   ~ = camino de tierra / puente (transitable)
 # =========================================================
 
 import pygame
@@ -42,9 +41,13 @@ from .settings import (
     COLOR_AGUA, COLOR_AGUA_LUZ,
     COLOR_BANCO, COLOR_BANCO_FRANJA,
     COLOR_HOSPITAL, COLOR_HOSPITAL_CRUZ,
+    COLOR_FERIA,
 )
 
-# --- Piezas de la ciudad (columnas 1 a 44 de cada fila) ---
+ANCHO_MAPA = 120   # tiles
+ALTO_MAPA = 100
+
+# --- Piezas de la ciudad original (columnas 1 a 44 de cada fila) ---
 _C2 = ".."                      # calle vertical de 2 tiles
 _CALLE44 = "." * 44             # calle horizontal completa
 _CASAS14 = ".HHHH...HHHH.."     # manzana de casas (bloque oeste)
@@ -53,7 +56,6 @@ _EDIF12 = ".XXXXXXXXXX."        # edificio comercial
 _EDIF14 = ".XXXXXXXXXXXX."      # edificio grande del oeste
 _BALDIO12 = "," * 12            # baldío (pasto dentro de la ciudad)
 
-# Bandas de manzanas: [P]ar de casas, fila con [T]rees, [W]alkway
 _P1 = _CASAS14 + _C2 + _CASAS12 + _C2 + _CASAS12 + _C2   # casas x3
 _P2 = _CASAS14 + _C2 + _BALDIO12 + _C2 + _EDIF12 + _C2   # casas/baldío/edificio
 _P2T = "." * 14 + _C2 + ",,,,AA,,,,,," + _C2 + _EDIF12 + _C2
@@ -75,28 +77,33 @@ def _local(interior, parque=_PARQUE28):
 
 
 # --- Campo y costanera (columnas 46 a 74, 29 caracteres) ---
-# El arroyo (ww) baja de norte a sur por las columnas 66-67; se
-# cruza por los puentes (~~) de las filas 22-23 y la avenida sur.
-# Del otro lado queda la Costanera (columnas 68-74).
+# El arroyo (ww) baja por las columnas 66-67; se cruza por los
+# puentes (~~). El campo ahora tiene granjas, un granero y una
+# huerta para que no sea puro pasto.
 _CAMPO29 = "," * 20 + "ww" + "," * 7
 _CAMPO_A1 = ",,,,AA,,,,,,,,,,,,,," + "ww" + ",,AA,,,"     # filas 2-3
+_CAMPO_GRANJA = ",,,,,,,,HHH,,,,,,,,," + "ww" + ",,AA,,,"  # filas 5-6
 _CAMPO_COSTA = "," * 20 + "ww" + ",,,AA,,"                # filas 8-9
 _CAMPO_A2 = ",,,AA,,,,,,,,,,,,,,," + "ww" + "," * 7       # fila 15
 _CAMPO_PUENTE = ",,,,,,,,AA,,,,,,,,,," + "~~" + "," * 7   # filas 22-23
+_CAMPO_GRANERO = ",,,,,,,,,XXX,,,,,,,," + "ww" + "," * 7  # filas 35-36
 _CAMPO_A4 = ",,,,,AA,,,,,,,,,,,,," + "ww" + "," * 7       # fila 37
+_CAMPO_HUERTA = ",,AA,,AA,,AA,,,,,,,," + "ww" + "," * 7   # filas 39-40
+
+for _pieza in (_CAMPO29, _CAMPO_A1, _CAMPO_GRANJA, _CAMPO_COSTA, _CAMPO_A2,
+               _CAMPO_PUENTE, _CAMPO_GRANERO, _CAMPO_A4, _CAMPO_HUERTA):
+    assert len(_pieza) == 29, f"Pieza de campo de {len(_pieza)} (≠29)"
 
 
 def _fila(ciudad, divisor="X", campo=_CAMPO29):
-    """Arma una fila del norte: borde + ciudad(44) + muro/portón +
-    campo y costanera(29) + borde. El assert evita colisiones corridas."""
-    fila = "X" + ciudad + divisor + campo + "X"
-    assert len(fila) == 76, f"Fila de {len(fila)} caracteres (≠76): {fila!r}"
+    """Fila de la ciudad original: borde + ciudad(44) + muro/portón +
+    campo(29). El borde este de la fila lo agrega el Barrio Este."""
+    fila = "X" + ciudad + divisor + campo
+    assert len(fila) == 75, f"Fila de {len(fila)} caracteres (≠75): {fila!r}"
     return fila
 
 
-# --- Distrito Sur (filas 44-56, contenido de 74 columnas) ---
-# Avenida que rodea el muro, kioscos de servicios (Banco, Clínica,
-# segundo almacén), galpones industriales y el puerto junto al arroyo.
+# --- Distrito Sur original (filas 44-56, contenido de 74 columnas) ---
 _SUR_AVENIDA = "." * 65 + "~~" + "." * 7                  # cruza el arroyo
 _SUR_KIOSCOS = (".BB" + "." * 10 + "SS" + "." * 9 + "TT" + "." * 4
                 + "." * 4 + "," * 31 + "ww" + "," * 7)
@@ -107,21 +114,24 @@ _SUR_PRADERA = "," * 65 + "ww" + "," * 7
 
 
 def _fila_sur(contenido):
-    fila = "X" + contenido + "X"
-    assert len(fila) == 76, f"Fila sur de {len(fila)} caracteres (≠76)"
+    fila = "X" + contenido
+    assert len(fila) == 75, f"Fila sur de {len(fila)} caracteres (≠75)"
     return fila
 
 
-MAPA = [
-    "X" * 76,
+# La ciudad original, SIN el borde este (75 columnas): el Barrio
+# Este se pega a la derecha de cada fila.
+_MAPA_OESTE = [
+    "X" * 75,
     # --- Local de Walter (filas 1-8) y parque del norte ---
     _fila(_local("XXXXXXXXXXXXXX")),
     _fila(_local("XpCCppppppFppX", ",,,AA,,,,,,,,,,,,,,AA,,,,,,,"),
           campo=_CAMPO_A1),
     _fila(_local("XppppppppppppX"), campo=_CAMPO_A1),
     _fila(_local("XpMMMMMMMMpppX")),
-    _fila(_local("XppppppppppppX")),
-    _fila(_local("XppppppppppppX", ",,,,,,,,AA,,,,,,,,,,,,,,,,,,")),
+    _fila(_local("XppppppppppppX"), campo=_CAMPO_GRANJA),
+    _fila(_local("XppppppppppppX", ",,,,,,,,AA,,,,,,,,,,,,,,,,,,"),
+          campo=_CAMPO_GRANJA),
     _fila(_local("XppppppppppppX")),
     _fila(_local("XXXXppXXXXXXXX"), campo=_CAMPO_COSTA),   # puerta en (5-6, 8)
     # --- Avenida norte (filas 9-10) ---
@@ -158,18 +168,18 @@ MAPA = [
     _fila(_CALLE44),
     _fila(_CALLE44),
     # --- Casas + edificio + baldío sur (filas 35-40) ---
-    _fila(_P4),
-    _fila(_P4),
+    _fila(_P4, campo=_CAMPO_GRANERO),
+    _fila(_P4, campo=_CAMPO_GRANERO),
     _fila(_W4, campo=_CAMPO_A4),
     _fila(_P4T),
-    _fila(_P4),
-    _fila(_W4B),
+    _fila(_P4, campo=_CAMPO_HUERTA),
+    _fila(_W4B, campo=_CAMPO_HUERTA),
     # --- Terminal vieja (filas 41-43) ---
     _fila(_CALLE44),
     _fila(_CALLE44),
     _fila(_CALLE44),
     # --- Distrito Sur (filas 44-56) ---
-    _fila_sur(_SUR_AVENIDA),     # la avenida rodea el muro del campo
+    _fila_sur(_SUR_AVENIDA),
     _fila_sur(_SUR_AVENIDA),
     _fila_sur(_SUR_KIOSCOS),     # Banco (2-3), Clínica (14-15), almacén (25-26)
     _fila_sur(_SUR_CALLE),
@@ -182,10 +192,142 @@ MAPA = [
     _fila_sur(_SUR_CALLE),
     _fila_sur(_SUR_PRADERA),
     _fila_sur(_SUR_PRADERA),
-    "X" * 76,
 ]
+assert len(_MAPA_OESTE) == 57  # filas 0-56; la 57 es el empalme con el sur
 
-TILES_SOLIDOS = ("X", "H", "A", "C", "T", "M", "F", "w", "B", "S")
+
+# --- Barrio Este (columnas 75-119, 45 caracteres por fila) ---
+# Calles verticales en 75-76, 89-90, 103-104 y 117-118; tres
+# bloques de 12 en el medio; borde en la 119.
+_B_CASAS = ".HHHH.HHHH.."
+_B_EDIF = ".XXXXXXXXXX."
+_B_PLAZA = "," * 12
+_B_PLAZA_A = ",,AA,,,,AA,,"
+_B_CALLE = "." * 12
+for _pieza in (_B_CASAS, _B_EDIF, _B_PLAZA, _B_PLAZA_A, _B_CALLE):
+    assert len(_pieza) == 12
+
+
+def _este(b1, b2, b3):
+    fila = ".." + b1 + ".." + b2 + ".." + b3 + "..X"
+    assert len(fila) == 45
+    return fila
+
+
+_E_CALLE = "." * 44 + "X"
+_E_ALMACEN = _este(".TT.........", _B_CALLE, _B_CALLE)  # almacén en (78-79)
+
+# Fila (1-56) → contenido del Barrio Este
+_ESTE = {}
+for _f in (3, 6, 9, 10, 13, 16, 17, 18, 21, 24, 25, 29, 32, 33, 34,
+           37, 40, 41, 42, 43, 44, 45, 48, 51, 54, 55, 56):
+    _ESTE[_f] = _E_CALLE
+_ESTE[26] = _E_ALMACEN
+for _f in (1, 2):
+    _ESTE[_f] = _este(_B_CASAS, _B_CASAS, _B_EDIF)
+for _f in (4, 5):
+    _ESTE[_f] = _este(_B_EDIF, _B_PLAZA, _B_CASAS)      # Plaza Este
+for _f in (7, 8):
+    _ESTE[_f] = _este(_B_CASAS, _B_PLAZA, _B_EDIF)      # Plaza Este
+for _f in (11, 12):
+    _ESTE[_f] = _este(_B_EDIF, _B_CASAS, _B_CASAS)
+for _f in (14, 15):
+    _ESTE[_f] = _este(_B_CASAS, _B_EDIF, _B_CASAS)
+for _f in (19, 20):
+    _ESTE[_f] = _este(_B_EDIF, _B_EDIF, _B_EDIF)
+for _f in (22, 23):
+    _ESTE[_f] = _este(_B_EDIF, _B_PLAZA, _B_EDIF)       # Galería Muerta
+for _f in (27, 28):
+    _ESTE[_f] = _este(_B_CASAS, _B_EDIF, _B_CASAS)
+for _f in (30, 31):
+    _ESTE[_f] = _este(_B_EDIF, _B_CASAS, _B_EDIF)
+for _f in (35, 36):
+    _ESTE[_f] = _este(_B_CASAS, _B_CASAS, _B_PLAZA_A)
+for _f in (38, 39):
+    _ESTE[_f] = _este(_B_EDIF, _B_CASAS, _B_CASAS)
+for _f in (46, 47):
+    _ESTE[_f] = _este(_B_EDIF, _B_EDIF, _B_CASAS)
+for _f in (49, 50):
+    _ESTE[_f] = _este(_B_CASAS, _B_EDIF, _B_EDIF)
+for _f in (52, 53):
+    _ESTE[_f] = _este(_B_EDIF, _B_CASAS, _B_CASAS)
+
+
+# --- Zona Sur Nueva (filas 57-99, 120 columnas) ---
+def _fila_ancha(contenido):
+    """Borde + 118 columnas de contenido + borde."""
+    fila = "X" + contenido + "X"
+    assert len(fila) == 120, f"Fila ancha de {len(fila)} (≠120)"
+    return fila
+
+
+def _empalme():
+    """Fila 57: el viejo muro sur, ahora con portones hacia la zona
+    nueva (y el arroyo que sigue de largo)."""
+    fila = list("X" * 120)
+    aberturas = [(10, 16, "."), (30, 36, "."), (50, 56, ","),
+                 (66, 68, "w"), (75, 77, "."), (89, 91, "."), (103, 105, ".")]
+    for desde, hasta, tile in aberturas:
+        for col in range(desde, hasta):
+            fila[col] = tile
+    return "".join(fila)
+
+
+# Piezas del sur (oeste 65 cols / arroyo 2 / este 51 cols)
+_S_AVENIDA = "." * 65 + "~~" + "." * 51          # avenida con puente
+_S_CALLE_W = "." * 65 + "ww" + "." * 51          # calle cortada por el arroyo
+_S_FERIA = ".kk." * 10 + "." * 25 + "ww" + ".HHH." * 10 + "."
+_S_FERIA_P = "." * 40 + "." * 25 + "ww" + "." * 51           # pasillo feria
+_S_INDUS = ".XXXXXXXX." * 5 + ",,XXXXXXXXXXX,," + "ww" + ".XXXXXX..." * 5 + "."
+_S_INDUS_C = "." * 50 + "," * 15 + "ww" + "." * 51           # calle interna
+_S_PLAYON = (".XXXXXXXX." + "." * 30 + ".XXXXXXXX."          # Playón Industrial
+             + "," * 15 + "ww" + ".HHH." * 10 + ".")
+_S_BAJO = ".HHH." * 13 + "ww" + ".HHH." * 10 + "."
+_S_BAJO_CALLE = "." * 65 + "ww" + "." * 51
+_S_BAJO_POCKET = (".HHH." * 13 + "ww"                        # Callejón del Bajo
+                  + ".HHH." * 4 + "." * 11 + ".HHH." * 4)
+_S_DEPOSITOS = ".XXXXXXXX." * 5 + "." * 15 + "ww" + ".XXXXXX..." * 5 + "."
+_S_MUELLE = "." * 65 + "ww" + "." * 51
+_S_AGUA = "w" * 118
+
+for _pieza in (_S_AVENIDA, _S_CALLE_W, _S_FERIA, _S_FERIA_P, _S_INDUS,
+               _S_INDUS_C, _S_PLAYON, _S_BAJO, _S_BAJO_CALLE,
+               _S_BAJO_POCKET, _S_DEPOSITOS, _S_MUELLE, _S_AGUA):
+    assert len(_pieza) == 118, f"Pieza sur de {len(_pieza)} (≠118)"
+
+_SUR_NUEVO = (
+    [_empalme()]                                  # fila 57
+    + [_fila_ancha(_S_AVENIDA)] * 2               # 58-59 avenida
+    + [_fila_ancha(_S_FERIA)] * 2                 # 60-61 feria + barrio este
+    + [_fila_ancha(_S_FERIA_P)]                   # 62 pasillo
+    + [_fila_ancha(_S_FERIA)] * 2                 # 63-64
+    + [_fila_ancha(_S_CALLE_W)]                   # 65 calle
+    + [_fila_ancha(_S_INDUS)] * 4                 # 66-69 galpones
+    + [_fila_ancha(_S_INDUS_C)]                   # 70 calle interna
+    + [_fila_ancha(_S_PLAYON)] * 4                # 71-74 Playón Industrial
+    + [_fila_ancha(_S_AVENIDA)] * 2               # 75-76 avenida
+    + [_fila_ancha(_S_BAJO)] * 2                  # 77-78 barrio bajo
+    + [_fila_ancha(_S_BAJO_CALLE)]                # 79
+    + [_fila_ancha(_S_BAJO_POCKET)] * 2           # 80-81 callejón
+    + [_fila_ancha(_S_BAJO_CALLE)]                # 82
+    + [_fila_ancha(_S_BAJO_POCKET)] * 2           # 83-84
+    + [_fila_ancha(_S_BAJO_CALLE)]                # 85
+    + [_fila_ancha(_S_BAJO)] * 2                  # 86-87
+    + [_fila_ancha(_S_AVENIDA)] * 2               # 88-89 avenida del puerto
+    + [_fila_ancha(_S_DEPOSITOS)] * 3             # 90-92 depósitos
+    + [_fila_ancha(_S_MUELLE)]                    # 93 calle del muelle
+    + [_fila_ancha(_S_MUELLE)] * 2                # 94-95 muelle
+    + [_fila_ancha(_S_AGUA)] * 3                  # 96-98 el mar
+    + ["X" * 120]                                 # 99 borde
+)
+assert len(_SUR_NUEVO) == 43  # filas 57-99
+
+MAPA = [_MAPA_OESTE[f] + _ESTE.get(f, "X" * 45) for f in range(57)] + _SUR_NUEVO
+
+assert len(MAPA) == ALTO_MAPA
+assert {len(f) for f in MAPA} == {ANCHO_MAPA}, "Filas con anchos distintos"
+
+TILES_SOLIDOS = ("X", "H", "A", "C", "T", "M", "F", "w", "B", "S", "k")
 
 # --- Puntos de referencia del local (en píxeles de mundo) ---
 PUNTO_PUERTA = (5.5 * TILE, 8.5 * TILE)       # vano de la puerta
@@ -215,11 +357,6 @@ class Mapa:
     en pantalla aplicando el offset de la cámara."""
 
     def __init__(self):
-        # Validación: todas las filas deben medir lo mismo,
-        # si no las colisiones quedan corridas.
-        anchos = {len(fila) for fila in MAPA}
-        assert len(anchos) == 1, f"Filas del mapa con anchos distintos: {anchos}"
-
         self.filas = len(MAPA)
         self.columnas = len(MAPA[0])
         self.ancho_px = self.columnas * TILE
@@ -256,18 +393,23 @@ class Mapa:
     def es_solido_en(self, x, y):
         """True si el punto (px de mundo) cae sobre un tile sólido.
         Consulta O(1) contra la grilla: la usan las líneas de visión
-        de los enemigos y las balas, que chequean muchos puntos por
-        frame (recorrer self.paredes sería carísimo)."""
+        de los enemigos, las balas y el pathfinding."""
         col = int(x) // TILE
         fila = int(y) // TILE
         if not (0 <= fila < self.filas and 0 <= col < self.columnas):
             return True  # fuera del mapa cuenta como pared
         return MAPA[fila][col] in TILES_SOLIDOS
 
+    def es_solido_tile(self, col, fila):
+        """Como es_solido_en pero en coordenadas de tile (pathfinding)."""
+        if not (0 <= fila < self.filas and 0 <= col < self.columnas):
+            return True
+        return MAPA[fila][col] in TILES_SOLIDOS
+
     def paredes_cerca(self, rect, margen=2):
         """Rects sólidos en un entorno de `margen` tiles alrededor del
         rect. Con el mapa grande conviene chequear colisiones contra
-        esta lista corta y no contra las ~800 paredes totales."""
+        esta lista corta y no contra las miles de paredes totales."""
         col_min = max(0, rect.left // TILE - margen)
         col_max = min(self.columnas - 1, rect.right // TILE + margen)
         fila_min = max(0, rect.top // TILE - margen)
@@ -310,6 +452,12 @@ class Mapa:
             pygame.draw.rect(superficie, COLOR_ARBOL, rect.inflate(-6, -6))
             pygame.draw.rect(superficie, COLOR_ARBOL_LUZ,
                              (rect.x + 8, rect.y + 8, 8, 8))
+        elif tile == "k":
+            # Kiosco de la feria: puesto de madera con lona
+            pygame.draw.rect(superficie, COLOR_CALLE, rect)
+            pygame.draw.rect(superficie, COLOR_FERIA, rect.inflate(-4, -4))
+            pygame.draw.rect(superficie, COLOR_TIENDA_TOLDO,
+                             (rect.x + 2, rect.y + 2, rect.width - 4, 7))
         elif tile == "C":
             # Cocina del local: acero con hornallas calientes
             pygame.draw.rect(superficie, COLOR_PISO_LOCAL, rect)
@@ -350,7 +498,7 @@ class Mapa:
             pygame.draw.rect(superficie, COLOR_HOSPITAL_CRUZ,
                              (rect.x + 9, rect.centery - 2, 14, 4))
         elif tile == "w":
-            # Arroyo: agua con reflejos desfasados
+            # Agua: arroyo y mar con reflejos desfasados
             pygame.draw.rect(superficie, COLOR_AGUA, rect)
             if (rect.x // TILE + rect.y // TILE) % 2 == 0:
                 pygame.draw.rect(superficie, COLOR_AGUA_LUZ,

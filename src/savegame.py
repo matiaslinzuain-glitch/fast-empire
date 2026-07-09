@@ -1,5 +1,5 @@
 # =========================================================
-# FAST EMPIRE — Guardado de partidas  [Fase 10]
+# FAST EMPIRE — Guardado de partidas  [Fase 11]
 #
 # Hasta MAX_PARTIDAS slots con nombre, cada uno en su archivo
 # partidas/<nombre>.json (carpeta en el .gitignore: cada
@@ -7,9 +7,10 @@
 #
 # Se guarda lo PERMANENTE: economía completa, habilidades,
 # franquicias, progreso con el Proveedor, pedidos en camino,
-# cajas en la puerta y la posición de Walter. Lo transitorio
-# (persecuciones, clientes, punto ilegal, tanda en el fuego)
-# arranca fresco al cargar.
+# cajas en la puerta, la posición de Walter, el reloj de
+# juego y los tratos del celular. Lo transitorio
+# (persecuciones, clientes, tanda en el fuego) arranca
+# fresco al cargar.
 #
 # main.py llama: listar() · guardar(juego) · cargar(ruta) ·
 # aplicar(juego, datos) · borrar(ruta) · hay_espacio(nombre)
@@ -20,8 +21,8 @@ import time
 import unicodedata
 from pathlib import Path
 
-from .settings import POSICION_INICIAL
-from .economy import Caja
+from .settings import POSICION_INICIAL, HORA_INICIAL
+from .economy import Caja, Trato
 from .enemies import crear_rivales
 
 RUTA_CARPETA = Path(__file__).resolve().parent.parent / "partidas"
@@ -29,7 +30,8 @@ MAX_PARTIDAS = 5
 
 CAMPOS_ECONOMIA = [
     "dinero", "banco", "ingredientes", "producto", "calidad",
-    "med_nat", "med_quim", "tiene_pistola", "balas", "puntos",
+    "med_nat", "med_quim", "tiene_pistola", "arma_equipada",
+    "balas", "sanguches", "puntos",
     "total_ilegal", "total_comida", "meds_desbloqueados",
     "receta_especial", "franquicias",
 ]
@@ -87,7 +89,7 @@ def guardar(juego):
     if not getattr(juego, "nombre_partida", None):
         return False
     datos = {
-        "version": 2,
+        "version": 3,
         "nombre": juego.nombre_partida,
         "fecha": time.strftime("%Y-%m-%d %H:%M"),
         "economia": {campo: getattr(juego.economia, campo)
@@ -102,6 +104,8 @@ def guardar(juego):
         "proveedor_visito": juego.proveedor_visito,
         "misiones_cumplidas": juego.misiones_cumplidas,
         "timer_oferta": juego.timer_oferta,
+        "reloj": juego.reloj_juego.minuto_total,
+        "tratos": [t.a_dict() for t in juego.tratos],
         "pedidos": [{"id": p["id"], "timer": p["timer"]}
                     for p in juego.pedidos],
         "cajas": [{"x": c.rect.x, "y": c.rect.y,
@@ -165,6 +169,11 @@ def aplicar(juego, datos):
     juego.proveedor_visito = datos.get("proveedor_visito", False)
     juego.misiones_cumplidas = datos.get("misiones_cumplidas", 0)
     juego.timer_oferta = datos.get("timer_oferta", 45.0)
+
+    # Reloj de juego y tratos del celular (Fase 11)
+    juego.reloj_juego.minuto_total = datos.get("reloj", float(HORA_INICIAL))
+    juego.tratos = [Trato.desde_dict(t, juego.reloj_juego)
+                    for t in datos.get("tratos", [])]
 
     juego.pedidos = [{"id": p["id"], "timer": p["timer"]}
                      for p in datos.get("pedidos", [])]

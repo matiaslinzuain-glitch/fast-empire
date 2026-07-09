@@ -6,10 +6,12 @@
 # =========================================================
 
 # --- Ventana ---
-ANCHO_VENTANA = 800
-ALTO_VENTANA = 600
+# Resolución lógica 16:9: en pantalla completa escala EXACTO a
+# 1920x1080 (2x), sin bordes negros ni estiramiento.
+ANCHO_VENTANA = 960
+ALTO_VENTANA = 540
 FPS = 60
-TITULO = "Fast Empire — Fase 9"
+TITULO = "Fast Empire — Fase 11"
 
 # --- Mundo ---
 TILE = 32  # tamaño de cada casillero del mapa en píxeles
@@ -92,3 +94,18 @@ COLOR_BALA            = (255, 230, 150)
 COLOR_CONO            = (255, 235, 150)  # cono de visión patrullando
 COLOR_CONO_ALERTA     = (255, 96, 70)    # cono de visión persiguiendo
 COLOR_MIRA            = (235, 235, 235)  # línea de apuntado
+
+# --- Fase 11: reloj de juego ---
+# 1 segundo real = 1 minuto de juego (un día dura 24 min reales)
+MINUTOS_POR_SEGUNDO = 1.0
+HORA_INICIAL = 8 * 60          # la partida arranca a las 08:00 del día 1
+
+# --- Fase 11: celular e inventario ---
+COLOR_CELULAR       = (26, 26, 32)     # carcasa del teléfono
+COLOR_CELULAR_BORDE = (70, 70, 80)
+COLOR_PANTALLA_CEL  = (16, 18, 24)     # fondo de la pantalla
+COLOR_APP_ACTIVA    = (222, 178, 84)   # pestaña de app seleccionada
+COLOR_SLOT          = (30, 30, 38)     # casillero de inventario
+COLOR_SLOT_BORDE    = (78, 78, 88)
+COLOR_SLOT_SEL      = (222, 178, 84)   # casillero seleccionado
+COLOR_FERIA         = (150, 96, 58)    # kioscos de la feria del sur (tile k)

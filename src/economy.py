@@ -1,17 +1,17 @@
 # =========================================================
-# FAST EMPIRE — Economía  [Fase 4]
+# FAST EMPIRE — Economía  [Fase 11]
 #
-# El negocio ahora tiene dos caras:
+# El negocio tiene dos caras:
 # - LEGAL: el local de comidas. Se piden ingredientes por
-#   teléfono (llegan en cajas), se cocina y se atiende a la
-#   fila del mostrador. Ingreso chico pero seguro.
-# - ILEGAL: medicamentos (naturales y químicos) pedidos por el
-#   mismo teléfono y revendidos en el punto ilegal, que rota
-#   de ubicación: pocos compradores, precios altos, y los
-#   inspectores te arrestan si te ven ahí con mercadería.
+#   el celular (llegan en cajas), se cocina y se atiende a
+#   la fila del mostrador. Ingreso chico pero seguro.
+# - ILEGAL: medicamentos (naturales y químicos). Desde la
+#   Fase 11 los compradores NO aparecen de la nada: te
+#   escriben al celular, acuerdan LUGAR y HORA, y a esa hora
+#   te esperan en el punto. Vos decidís qué tratos aceptar.
 #
 # Clases: Economia (estado único), Produccion (cocinar),
-# Caja (paquete entregado), PuntoIlegal (zona rotativa).
+# Caja (paquete entregado), Trato (venta acordada).
 # =========================================================
 
 import random
@@ -68,6 +68,7 @@ BALAS_POR_PACK = 12
 PRECIO_BALAS = 30
 PRECIO_SANGUCHE = 25
 CURA_SANGUCHE = 30
+MAX_SANGUCHES = 5      # los sanguches se guardan en el inventario
 PRECIO_CURACION = 50   # la clínica del distrito sur cura al 100%
 
 # --- Consecuencias ---
@@ -98,7 +99,9 @@ class Economia:
         self.med_nat = 0         # medicamentos naturales
         self.med_quim = 0        # medicamentos químicos
         self.tiene_pistola = False
+        self.arma_equipada = False  # con pistola: alternar pistola/puños
         self.balas = 0
+        self.sanguches = 0       # curación de bolsillo (inventario)
         self.puntos = 0          # puntos de habilidad acumulados
         self.total_ilegal = 0    # facturación en negro: fama ante rivales
         self.total_comida = 0    # facturación del local: atrae al proveedor
@@ -160,18 +163,25 @@ class Economia:
     def tiene_meds(self):
         return self.med_nat + self.med_quim > 0
 
-    def vender_med(self, tipo):
-        """Vende un medicamento en el punto ilegal. Devuelve el precio
-        (base ±15% según el comprador)."""
-        precio = round(VENTA_MED[tipo] * random.uniform(0.9, 1.15))
+    def stock_med(self, tipo):
+        return self.med_nat if tipo == "med_nat" else self.med_quim
+
+    def vender_trato(self, tipo, cantidad, precio_unit):
+        """Cierra un trato acordado por celular: entrega hasta
+        `cantidad` unidades (lo que haya en stock) al precio pactado.
+        Devuelve (unidades vendidas, plata cobrada)."""
+        vendidas = min(cantidad, self.stock_med(tipo))
+        if vendidas <= 0:
+            return 0, 0
         if tipo == "med_nat":
-            self.med_nat -= 1
+            self.med_nat -= vendidas
         else:
-            self.med_quim -= 1
-        self.dinero += precio
-        self.total_ilegal += precio
-        self.puntos += PUNTOS_POR_VENTA
-        return precio
+            self.med_quim -= vendidas
+        cobrado = vendidas * precio_unit
+        self.dinero += cobrado
+        self.total_ilegal += cobrado
+        self.puntos += PUNTOS_POR_VENTA * vendidas
+        return vendidas, cobrado
 
     def es_amenaza(self):
         """True cuando los rivales ya te conocen y te atacan."""
@@ -270,10 +280,12 @@ INTERVALO_FRANQUICIA = 30.0  # ...cada tantos segundos
 
 DATOS_FRANQUICIAS = [
     # (id de zona — coincide con el rival —, nombre, tile, precio)
-    ("mercado", "Puesto del Mercado",   (25, 21), 400),
-    ("campo",   "Parada del Campo",     (50, 24), 550),
-    ("sur",     "Kiosco del Sur",       (37, 38), 700),
-    ("puerto",  "Depósito del Puerto",  (40, 50), 850),
+    ("mercado", "Puesto del Mercado",    (25, 21), 400),
+    ("campo",   "Parada del Campo",      (50, 24), 550),
+    ("sur",     "Kiosco del Sur",        (37, 38), 700),
+    ("puerto",  "Depósito del Puerto",   (40, 50), 850),
+    ("feria",   "Puesto de la Feria",    (44, 62), 950),
+    ("muelle",  "Depósito del Muelle",   (36, 94), 1100),
 ]
 
 
@@ -304,9 +316,10 @@ def crear_franquicias():
     return [Franquicia(*datos) for datos in DATOS_FRANQUICIAS]
 
 
-# --- Punto de venta ilegal rotativo ---
-# Candidatos: (nombre, (col, fila, ancho, alto) en tiles)
-CANDIDATOS_PUNTO = [
+# --- Lugares de venta (para acordar tratos por celular) ---
+# (nombre, (col, fila, ancho, alto) en tiles). Con el mapa de la
+# Fase 11 hay puntos en todos los distritos.
+LUGARES_VENTA = [
     ("Parque del Norte",    (19, 3, 10, 2)),
     ("Baldío del Mercado",  (18, 19, 10, 5)),
     ("Baldío Sur",          (32, 35, 10, 5)),
@@ -314,61 +327,106 @@ CANDIDATOS_PUNTO = [
     ("Terminal Vieja",      (28, 41, 14, 2)),
     ("Puerto Sur",          (36, 48, 18, 5)),
     ("La Costanera",        (68, 12, 6, 10)),
+    ("Plaza Este",          (91, 4, 12, 5)),
+    ("Galería Muerta",      (91, 21, 12, 4)),
+    ("Feria del Sur",       (41, 59, 24, 6)),
+    ("Playón Industrial",   (12, 71, 27, 4)),
+    ("Callejón del Bajo",   (88, 80, 10, 5)),
+    ("Muelle Nuevo",        (30, 93, 18, 3)),
 ]
 
+# Ventana del encuentro (en minutos de juego): el comprador llega
+# un rato antes de la hora pactada y espera un rato después
+MINUTOS_LLEGA_ANTES = 15
+MINUTOS_ESPERA = 45
+MINUTOS_EXPIRA_OFERTA = (45, 90)     # cuánto vive una oferta sin aceptar
+MINUTOS_CITA = (120, 300)            # a cuántos minutos se pacta la cita
+BONUS_TRATO = (1.15, 1.45)           # sobreprecio por venta acordada
+MAX_TRATOS_ACTIVOS = 3
+MAX_OFERTAS = 2
 
-class PuntoIlegal:
-    """Zona de reventa de medicamentos. Pocos compradores que pagan
-    caro. Se muda cuando se agota la demanda o pasa el tiempo, y
-    también conviene rajar si aparecen inspectores."""
+_NOMBRES_COMPRADOR = ["R.", "El Flaco", "M.", "La Turca", "Gaita",
+                      "El Ruso", "Piba del sur", "Don Nadie", "K.",
+                      "El Primo", "Santi B.", "Morocho"]
 
-    def __init__(self):
-        self.nombre = None
-        self._mudarse()
 
-    def _mudarse(self):
-        opciones = [c for c in CANDIDATOS_PUNTO if c[0] != self.nombre]
-        nombre, (col, fila, ancho, alto) = random.choice(opciones)
-        self.nombre = nombre
-        self.rect = pygame.Rect(col * TILE, fila * TILE, ancho * TILE, alto * TILE)
-        self.demanda = random.randint(4, 7)   # compradores de esta tanda
-        self.vendidos = 0
-        self.timer_vida = random.uniform(80, 120)  # se muda solo, además
-        self.timer_spawn = 2.0
+class Trato:
+    """Una venta acordada por celular: comprador, mercadería, lugar
+    y hora. Estados: oferta → aceptado → encuentro → hecho/fallido."""
+
+    def __init__(self, reloj):
+        self.comprador_nombre = random.choice(_NOMBRES_COMPRADOR)
+        self.lugar_idx = random.randrange(len(LUGARES_VENTA))
+        self.tipo = random.choice(("med_nat", "med_quim"))
+        self.cantidad = random.randint(2, 5)
+        self.precio_unit = round(VENTA_MED[self.tipo]
+                                 * random.uniform(*BONUS_TRATO))
+        self.minuto_cita = reloj.en_minutos(random.randint(*MINUTOS_CITA))
+        self.minuto_expira = reloj.en_minutos(
+            random.randint(*MINUTOS_EXPIRA_OFERTA))
+        self.estado = "oferta"
 
     @property
-    def restantes(self):
-        return max(0, self.demanda - self.vendidos)
+    def nombre_lugar(self):
+        return LUGARES_VENTA[self.lugar_idx][0]
 
-    def contiene(self, rect):
-        return self.rect.colliderect(rect)
+    @property
+    def rect(self):
+        col, fila, ancho, alto = LUGARES_VENTA[self.lugar_idx][1]
+        return pygame.Rect(col * TILE, fila * TILE, ancho * TILE, alto * TILE)
 
-    def registrar_venta(self):
-        self.vendidos += 1
+    @property
+    def total(self):
+        return self.cantidad * self.precio_unit
+
+    def punto_espera(self):
+        """Dónde se para el comprador a esperar (centro de la zona)."""
+        return self.rect.center
 
     def punto_spawn(self):
-        """Punto aleatorio del perímetro, para que los compradores
-        entren caminando desde el borde."""
+        """Punto del perímetro por el que entra caminando."""
+        rect = self.rect
         lado = random.randint(0, 3)
         if lado == 0:
-            return random.randint(self.rect.left, self.rect.right), self.rect.top
+            return random.randint(rect.left, rect.right), rect.top
         if lado == 1:
-            return random.randint(self.rect.left, self.rect.right), self.rect.bottom
+            return random.randint(rect.left, rect.right), rect.bottom
         if lado == 2:
-            return self.rect.left, random.randint(self.rect.top, self.rect.bottom)
-        return self.rect.right, random.randint(self.rect.top, self.rect.bottom)
+            return rect.left, random.randint(rect.top, rect.bottom)
+        return rect.right, random.randint(rect.top, rect.bottom)
 
-    def actualizar(self, dt, vendiendo):
-        """Devuelve "mudanza" si el punto cambió de lugar, "spawn" si
-        corresponde que aparezca un comprador, o None."""
-        self.timer_vida -= dt
-        if self.timer_vida <= 0 or self.vendidos >= self.demanda:
-            self._mudarse()
-            return "mudanza"
-        if vendiendo:
-            self.timer_spawn -= dt
-            if self.timer_spawn <= 0:
-                # Demanda baja a propósito: "menos cantidad, más valor"
-                self.timer_spawn = random.uniform(6.0, 9.0)
-                return "spawn"
-        return None
+    def mensaje(self, reloj):
+        """El texto del chat en el celular."""
+        return (f"Busco {self.cantidad} {NOMBRE_MED[self.tipo]}. "
+                f"{self.nombre_lugar}, {reloj.texto_hora(self.minuto_cita)}. "
+                f"Pago ${self.total}.")
+
+    def hora_llegada(self):
+        return self.minuto_cita - MINUTOS_LLEGA_ANTES
+
+    def hora_limite(self):
+        return self.minuto_cita + MINUTOS_ESPERA
+
+    # --- guardado ---
+    def a_dict(self):
+        return {"comprador": self.comprador_nombre,
+                "lugar": self.lugar_idx, "tipo": self.tipo,
+                "cantidad": self.cantidad, "precio": self.precio_unit,
+                "cita": self.minuto_cita, "expira": self.minuto_expira,
+                "estado": self.estado}
+
+    @classmethod
+    def desde_dict(cls, datos, reloj):
+        trato = cls(reloj)
+        trato.comprador_nombre = datos["comprador"]
+        trato.lugar_idx = datos["lugar"]
+        trato.tipo = datos["tipo"]
+        trato.cantidad = datos["cantidad"]
+        trato.precio_unit = datos["precio"]
+        trato.minuto_cita = datos["cita"]
+        trato.minuto_expira = datos["expira"]
+        # Un encuentro en curso se retoma como "aceptado": el
+        # comprador vuelve a entrar apenas cargue la partida
+        trato.estado = ("aceptado" if datos["estado"] == "encuentro"
+                        else datos["estado"])
+        return trato
