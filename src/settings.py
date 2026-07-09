@@ -1,0 +1,94 @@
+# =========================================================
+# FAST EMPIRE — Configuración global
+# Todas las constantes del juego viven acá para que
+# cualquier ajuste (velocidad, colores, tamaños) se haga
+# en un solo lugar.
+# =========================================================
+
+# --- Ventana ---
+ANCHO_VENTANA = 800
+ALTO_VENTANA = 600
+FPS = 60
+TITULO = "Fast Empire — Fase 9"
+
+# --- Mundo ---
+TILE = 32  # tamaño de cada casillero del mapa en píxeles
+
+# --- Jugador ---
+VELOCIDAD_JUGADOR = 220          # píxeles por segundo
+TAM_JUGADOR = (22, 26)           # hitbox (ancho, alto), un poco menor al tile
+POSICION_INICIAL = (5 * TILE, 3 * TILE)  # detrás del mostrador del local
+
+# --- Paleta de colores (pixel art, tonos realistas) ---
+COLOR_FONDO       = (18, 18, 22)     # negro azulado de fondo
+COLOR_CALLE       = (52, 52, 56)     # asfalto
+COLOR_CALLE_LINEA = (66, 66, 70)     # detalle sutil del asfalto
+COLOR_PASTO       = (58, 82, 44)     # verde apagado del campo
+COLOR_PASTO_DET   = (66, 92, 50)     # matas de pasto
+COLOR_TIERRA      = (110, 86, 56)    # camino de tierra que une ciudad y campo
+COLOR_EDIFICIO    = (88, 74, 66)     # ladrillo/cemento envejecido
+COLOR_EDIFICIO_TOP= (108, 92, 82)    # borde superior (da sensación de altura)
+COLOR_ARBOL       = (38, 60, 34)     # copa de árbol
+COLOR_ARBOL_LUZ   = (52, 78, 44)     # brillo de la copa
+COLOR_JUGADOR     = (196, 164, 120)  # piel
+COLOR_ROPA        = (120, 40, 40)    # delantal/campera bordó de cocinero
+COLOR_TEXTO       = (230, 230, 230)  # HUD
+
+# --- Colores Fase 2: HUD, menús, zonas de venta y mobiliario ---
+COLOR_TEXTO_SUAVE  = (150, 150, 155)  # textos secundarios
+COLOR_ORO          = (222, 178, 84)   # títulos y selección de menú
+COLOR_DINERO       = (150, 215, 140)  # plata ganada
+COLOR_ERROR        = (235, 120, 105)  # avisos ("no te alcanza", etc.)
+COLOR_ZONA         = (255, 214, 100)  # zona de venta operativa
+COLOR_ZONA_FRIA    = (130, 170, 230)  # zona enfriándose
+COLOR_COCINA       = (82, 84, 92)     # carrito/cocina de Walter (acero)
+COLOR_COCINA_TOP   = (214, 128, 52)   # tapa caliente de la cocina
+COLOR_TIENDA       = (104, 72, 48)    # mostrador de madera de la tienda
+COLOR_TIENDA_TOLDO = (158, 58, 48)    # toldo rojo de la tienda
+
+# --- Combate (Fase 3) ---
+VIDA_JUGADOR = 100
+DANO_GOLPE = 15            # ataque cuerpo a cuerpo (sin arma)
+ALCANCE_GOLPE = 46         # px desde el centro del jugador
+CADENCIA_GOLPE = 0.5       # segundos entre golpes
+DANO_PISTOLA = 25
+CADENCIA_PISTOLA = 0.35
+VELOCIDAD_BALA = 520       # px/s de las balas del jugador
+DISPERSION_CADERA = 7      # grados de error disparando sin apuntar
+DISPERSION_APUNTADO = 2    # con la mira (click derecho)
+FRENO_APUNTADO = 0.55      # multiplicador de velocidad al apuntar
+
+# --- Colores Fase 4: el local, el delivery y los medicamentos ---
+COLOR_CASA          = (146, 124, 98)   # pared de casa
+COLOR_CASA_TECHO    = (152, 76, 58)    # tejas
+COLOR_PISO_LOCAL    = (112, 88, 60)    # madera del local
+COLOR_PISO_LINEA    = (100, 78, 52)    # junta de tablones
+COLOR_MOSTRADOR     = (88, 62, 40)     # frente del mostrador
+COLOR_MOSTRADOR_TOP = (168, 136, 96)   # tapa del mostrador
+COLOR_TELEFONO      = (40, 42, 48)     # aparato
+COLOR_TELEFONO_LUZ  = (120, 200, 160)  # pantallita encendida
+COLOR_CAJA          = (150, 110, 66)   # cartón
+COLOR_CAJA_CINTA    = (196, 172, 120)  # cinta de embalar
+COLOR_MED_NAT       = (120, 190, 120)  # medicamentos naturales
+COLOR_MED_QUIM      = (170, 120, 220)  # medicamentos químicos
+COLOR_PUNTO         = (196, 120, 230)  # marcador del punto ilegal
+
+# --- Colores Fase 7: distrito sur, arroyo y servicios ---
+COLOR_AGUA          = (50, 84, 118)    # el arroyo
+COLOR_AGUA_LUZ      = (74, 112, 148)   # reflejos del agua
+COLOR_BANCO         = (148, 150, 162)  # piedra del banco
+COLOR_BANCO_FRANJA  = (222, 178, 84)   # franja dorada
+COLOR_HOSPITAL      = (226, 230, 232)  # clínica blanca
+COLOR_HOSPITAL_CRUZ = (196, 60, 54)    # cruz roja
+
+# --- Colores Fase 3: combate y enemigos ---
+COLOR_VIDA            = (200, 70, 60)    # barra de vida
+COLOR_VIDA_FONDO      = (60, 24, 20)
+COLOR_INSPECTOR       = (205, 210, 215)  # uniforme sanitario claro
+COLOR_INSPECTOR_GORRA = (240, 244, 248)
+COLOR_RIVAL           = (44, 44, 50)     # ropa oscura
+COLOR_RIVAL_BANDANA   = (172, 52, 46)
+COLOR_BALA            = (255, 230, 150)
+COLOR_CONO            = (255, 235, 150)  # cono de visión patrullando
+COLOR_CONO_ALERTA     = (255, 96, 70)    # cono de visión persiguiendo
+COLOR_MIRA            = (235, 235, 235)  # línea de apuntado
