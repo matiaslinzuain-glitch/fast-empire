@@ -1,8 +1,9 @@
 # =========================================================
 # FAST EMPIRE — Guardado de partidas  [Fase 10]
 #
-# Un slot en partidas/partida.json (la carpeta está en el
-# .gitignore: cada jugador tiene su propia partida).
+# Hasta MAX_PARTIDAS slots con nombre, cada uno en su archivo
+# partidas/<nombre>.json (carpeta en el .gitignore: cada
+# jugador tiene sus propias partidas).
 #
 # Se guarda lo PERMANENTE: economía completa, habilidades,
 # franquicias, progreso con el Proveedor, pedidos en camino,
@@ -10,18 +11,21 @@
 # (persecuciones, clientes, punto ilegal, tanda en el fuego)
 # arranca fresco al cargar.
 #
-# main.py llama: guardar(juego) · cargar() · aplicar(juego, d)
+# main.py llama: listar() · guardar(juego) · cargar(ruta) ·
+# aplicar(juego, datos) · borrar(ruta) · hay_espacio(nombre)
 # =========================================================
 
 import json
 import time
+import unicodedata
 from pathlib import Path
 
 from .settings import POSICION_INICIAL
 from .economy import Caja
 from .enemies import crear_rivales
 
-RUTA_PARTIDA = Path(__file__).resolve().parent.parent / "partidas" / "partida.json"
+RUTA_CARPETA = Path(__file__).resolve().parent.parent / "partidas"
+MAX_PARTIDAS = 5
 
 CAMPOS_ECONOMIA = [
     "dinero", "banco", "ingredientes", "producto", "calidad",
@@ -31,14 +35,60 @@ CAMPOS_ECONOMIA = [
 ]
 
 
-def existe():
-    return RUTA_PARTIDA.exists()
+def _slug(nombre):
+    """Nombre → nombre de archivo seguro ("Matías 2" → "matias-2")."""
+    sin_acentos = unicodedata.normalize("NFKD", nombre)
+    sin_acentos = sin_acentos.encode("ascii", "ignore").decode("ascii")
+    limpio = "".join(c if c.isalnum() else "-" for c in sin_acentos.lower())
+    limpio = "-".join(parte for parte in limpio.split("-") if parte)
+    return limpio[:24] or "partida"
+
+
+def ruta_de(nombre):
+    return RUTA_CARPETA / f"{_slug(nombre)}.json"
+
+
+def listar():
+    """Partidas guardadas (más reciente primero). Cada entrada:
+    {"nombre", "ruta", "fecha", "dinero"}. Ignora archivos rotos."""
+    if not RUTA_CARPETA.exists():
+        return []
+    entradas = []
+    archivos = sorted(RUTA_CARPETA.glob("*.json"),
+                      key=lambda p: p.stat().st_mtime, reverse=True)
+    for archivo in archivos:
+        try:
+            with open(archivo, encoding="utf-8") as f:
+                datos = json.load(f)
+            entradas.append({
+                "nombre": datos.get("nombre", archivo.stem),
+                "ruta": archivo,
+                "fecha": datos.get("fecha", "?"),
+                "dinero": datos.get("economia", {}).get("dinero", 0),
+            })
+        except (OSError, json.JSONDecodeError):
+            continue  # archivo roto: no aparece en la lista
+    return entradas
+
+
+def existe_nombre(nombre):
+    return ruta_de(nombre).exists()
+
+
+def hay_espacio(nombre):
+    """True si se puede guardar con ese nombre: o ya existe (se pisa
+    a sí misma) o todavía no se llegó al máximo de slots."""
+    return existe_nombre(nombre) or len(listar()) < MAX_PARTIDAS
 
 
 def guardar(juego):
-    """Vuelca el estado permanente a disco. Devuelve True si pudo."""
+    """Vuelca el estado permanente al slot de la partida actual
+    (juego.nombre_partida). Devuelve True si pudo."""
+    if not getattr(juego, "nombre_partida", None):
+        return False
     datos = {
-        "version": 1,
+        "version": 2,
+        "nombre": juego.nombre_partida,
         "fecha": time.strftime("%Y-%m-%d %H:%M"),
         "economia": {campo: getattr(juego.economia, campo)
                      for campo in CAMPOS_ECONOMIA},
@@ -59,22 +109,29 @@ def guardar(juego):
                   for c in juego.cajas],
     }
     try:
-        RUTA_PARTIDA.parent.mkdir(parents=True, exist_ok=True)
-        with open(RUTA_PARTIDA, "w", encoding="utf-8") as archivo:
-            json.dump(datos, archivo, ensure_ascii=False, indent=2)
+        RUTA_CARPETA.mkdir(parents=True, exist_ok=True)
+        with open(ruta_de(juego.nombre_partida), "w", encoding="utf-8") as f:
+            json.dump(datos, f, ensure_ascii=False, indent=2)
         return True
     except OSError:
         return False
 
 
-def cargar():
-    """Lee la partida guardada. Devuelve el dict o None si no hay
-    (o si el archivo está roto)."""
+def cargar(ruta):
+    """Lee una partida. Devuelve el dict o None si está rota."""
     try:
-        with open(RUTA_PARTIDA, encoding="utf-8") as archivo:
-            return json.load(archivo)
+        with open(ruta, encoding="utf-8") as f:
+            return json.load(f)
     except (OSError, json.JSONDecodeError):
         return None
+
+
+def borrar(ruta):
+    try:
+        Path(ruta).unlink()
+        return True
+    except OSError:
+        return False
 
 
 def aplicar(juego, datos):

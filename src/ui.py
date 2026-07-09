@@ -277,8 +277,8 @@ class MenuPrincipal(_MenuVertical):
     def refrescar_debug(self, activo):
         self.opciones[3] = f"Modo debug: {'sí' if activo else 'no'}"
 
-    def refrescar_guardado(self, hay_partida):
-        self.opciones[1] = ("Cargar partida" if hay_partida
+    def refrescar_guardado(self, cantidad):
+        self.opciones[1] = (f"Cargar partida ({cantidad}/5)" if cantidad
                             else "Cargar partida (vacío)")
 
     def manejar_evento(self, evento):
@@ -298,6 +298,155 @@ class MenuPrincipal(_MenuVertical):
         pie = self.fuente_sub.render(
             "Mouse o W/S + ENTER", True, COLOR_TEXTO_SUAVE)
         superficie.blit(pie, ((ANCHO_VENTANA - pie.get_width()) // 2, ALTO_VENTANA - 50))
+
+
+# ---------------------------------------------------------
+# Nueva partida: escribir el nombre del slot
+# ---------------------------------------------------------
+class PantallaNombre:
+    LARGO_MAXIMO = 16
+
+    def __init__(self):
+        self.fuente_titulo = pygame.font.Font(None, 64)
+        self.fuente = pygame.font.Font(None, 40)
+        self.fuente_chica = pygame.font.Font(None, 25)
+        self.texto = ""
+        self.mensaje = ""
+
+    def abrir(self):
+        self.texto = ""
+        self.mensaje = ""
+
+    def manejar_evento(self, evento):
+        """Devuelve "cancelar", ("crear", nombre) o None."""
+        if evento.type != pygame.KEYDOWN:
+            return None
+        if evento.key == pygame.K_ESCAPE:
+            return "cancelar"
+        if evento.key == pygame.K_RETURN:
+            nombre = self.texto.strip()
+            if nombre:
+                return ("crear", nombre)
+            self.mensaje = "Poné un nombre."
+            return None
+        if evento.key == pygame.K_BACKSPACE:
+            self.texto = self.texto[:-1]
+            return None
+        caracter = evento.unicode
+        if (caracter and caracter.isprintable()
+                and len(self.texto) < self.LARGO_MAXIMO):
+            self.texto += caracter
+        return None
+
+    def dibujar(self, superficie, pisa_existente, hay_espacio):
+        superficie.fill(COLOR_FONDO)
+        titulo = self.fuente_titulo.render("NUEVA PARTIDA", True, COLOR_ORO)
+        superficie.blit(titulo, ((ANCHO_VENTANA - titulo.get_width()) // 2, 120))
+        etiqueta = self.fuente_chica.render(
+            "Nombre de la partida:", True, COLOR_TEXTO_SUAVE)
+        superficie.blit(etiqueta, ((ANCHO_VENTANA - etiqueta.get_width()) // 2, 210))
+
+        # Caja de texto con cursor titilante
+        caja = pygame.Rect(ANCHO_VENTANA // 2 - 170, 245, 340, 48)
+        pygame.draw.rect(superficie, (24, 24, 30), caja)
+        pygame.draw.rect(superficie, COLOR_ORO, caja, 2)
+        cursor = "|" if (pygame.time.get_ticks() // 450) % 2 == 0 else " "
+        img = self.fuente.render(self.texto + cursor, True, COLOR_TEXTO)
+        superficie.blit(img, (caja.x + 12, caja.y + 10))
+
+        # Avisos según el nombre elegido
+        if self.texto.strip() and pisa_existente:
+            aviso = "Ya existe una partida con ese nombre: se va a pisar."
+            color = COLOR_ORO
+        elif not hay_espacio:
+            aviso = "Máximo 5 partidas — borrá una desde \"Cargar partida\"."
+            color = COLOR_ERROR
+        else:
+            aviso = self.mensaje
+            color = COLOR_ERROR
+        if aviso:
+            img = self.fuente_chica.render(aviso, True, color)
+            superficie.blit(img, ((ANCHO_VENTANA - img.get_width()) // 2, 315))
+
+        pie = self.fuente_chica.render(
+            "ENTER — crear  ·  ESC — volver", True, COLOR_TEXTO_SUAVE)
+        superficie.blit(pie, ((ANCHO_VENTANA - pie.get_width()) // 2, ALTO_VENTANA - 60))
+
+
+# ---------------------------------------------------------
+# Cargar partida: listado de slots (cargar o borrar)
+# ---------------------------------------------------------
+class PantallaPartidas(_MenuVertical):
+    def __init__(self):
+        super().__init__(["(no hay partidas guardadas)"])
+        self.fuente = pygame.font.Font(None, 34)
+        self.fuente_titulo = pygame.font.Font(None, 64)
+        self.fuente_chica = pygame.font.Font(None, 25)
+        self.entradas = []
+        self.confirmar = None   # índice esperando segundo X
+        self.mensaje = ""
+
+    def abrir(self, entradas):
+        self.entradas = entradas
+        if entradas:
+            self.opciones[:] = [
+                f"{e['nombre']}  —  ${e['dinero']}  —  {e['fecha']}"
+                for e in entradas]
+        else:
+            self.opciones[:] = ["(no hay partidas guardadas)"]
+        self.seleccion = 0
+        self.confirmar = None
+        self.mensaje = ""
+
+    def manejar_evento(self, evento):
+        """Devuelve "cerrar", ("cargar", i), ("borrar", i) o None."""
+        if evento.type == pygame.KEYDOWN and evento.key == pygame.K_ESCAPE:
+            return "cerrar"
+
+        # Borrar: tecla X o click derecho sobre una entrada
+        indice_borrar = None
+        if (evento.type == pygame.KEYDOWN and evento.key == pygame.K_x
+                and self.entradas):
+            indice_borrar = self.seleccion
+        elif (evento.type == pygame.MOUSEBUTTONDOWN and evento.button == 3
+                and self.entradas):
+            indice_borrar = self._indice_en(evento.pos)
+        if indice_borrar is not None:
+            self.seleccion = indice_borrar
+            if self.confirmar == indice_borrar:
+                self.confirmar = None
+                return ("borrar", indice_borrar)
+            self.confirmar = indice_borrar
+            nombre = self.entradas[indice_borrar]["nombre"]
+            self.mensaje = f"¿Borrar '{nombre}'? Apretá X de nuevo."
+            return None
+
+        seleccion_previa = self.seleccion
+        i = self._navegar(evento)
+        if self.seleccion != seleccion_previa:
+            self.confirmar = None
+            self.mensaje = ""
+        if i is None:
+            return None
+        if not self.entradas:
+            return "cerrar"
+        return ("cargar", i)
+
+    def dibujar(self, superficie):
+        superficie.fill(COLOR_FONDO)
+        titulo = self.fuente_titulo.render("CARGAR PARTIDA", True, COLOR_ORO)
+        superficie.blit(titulo, ((ANCHO_VENTANA - titulo.get_width()) // 2, 70))
+        info = self.fuente_chica.render(
+            f"{len(self.entradas)}/5 partidas guardadas", True, COLOR_TEXTO_SUAVE)
+        superficie.blit(info, ((ANCHO_VENTANA - info.get_width()) // 2, 135))
+        self._dibujar_opciones(superficie, 190, interlinea=52)
+        if self.mensaje:
+            img = self.fuente_chica.render(self.mensaje, True, COLOR_ERROR)
+            superficie.blit(img, ((ANCHO_VENTANA - img.get_width()) // 2, 470))
+        pie = self.fuente_chica.render(
+            "ENTER/click — cargar  ·  X o click derecho — borrar  ·  ESC — volver",
+            True, COLOR_TEXTO_SUAVE)
+        superficie.blit(pie, ((ANCHO_VENTANA - pie.get_width()) // 2, ALTO_VENTANA - 55))
 
 
 # ---------------------------------------------------------

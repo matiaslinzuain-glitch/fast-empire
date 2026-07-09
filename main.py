@@ -56,7 +56,7 @@ from src.ui import (
     HUD, TextoFlotante,
     MenuPrincipal, PantallaOpciones, MenuPausa,
     PantallaTienda, PantallaPedidos, PantallaHabilidades, PantallaBanco,
-    PantallaCocina,
+    PantallaCocina, PantallaNombre, PantallaPartidas,
 )
 
 # Nombres legibles de las zonas (para las misiones de limpieza)
@@ -103,6 +103,8 @@ class Juego:
         self.dialogo = CajaDialogo()
         self.banco_ui = PantallaBanco()
         self.cocina_ui = PantallaCocina()
+        self.nombre_ui = PantallaNombre()
+        self.partidas_ui = PantallaPartidas()
         self.hud = HUD()
         self.fuente_mundo = pygame.font.Font(None, 22)
         self.capa_conos = pygame.Surface((ANCHO_VENTANA, ALTO_VENTANA), pygame.SRCALPHA)
@@ -112,7 +114,8 @@ class Juego:
         self.debug = False
         # True cuando hay una partida en marcha (para el autosave al salir)
         self.partida_activa = False
-        self.menu.refrescar_guardado(savegame.existe())
+        self.nombre_partida = None  # slot al que se guarda todo
+        self.menu.refrescar_guardado(len(savegame.listar()))
 
         self.nueva_partida()
 
@@ -167,7 +170,7 @@ class Juego:
 
     def _guardar_partida(self, aviso=None):
         ok = savegame.guardar(self)
-        self.menu.refrescar_guardado(savegame.existe())
+        self.menu.refrescar_guardado(len(savegame.listar()))
         if ok and aviso and self.estado == "jugando":
             self._texto_sobre_jugador(aviso, COLOR_DINERO)
         return ok
@@ -209,7 +212,8 @@ class Juego:
             return
 
         # Sonidos de interfaz: click en menús, blip en diálogos
-        if self.estado != "jugando" and (
+        # (en la pantalla de nombre no: E y ESPACIO son parte del texto)
+        if self.estado not in ("jugando", "nombre") and (
                 (evento.type == pygame.KEYDOWN and evento.key in (
                     pygame.K_RETURN, pygame.K_e, pygame.K_SPACE))
                 or (evento.type == pygame.MOUSEBUTTONDOWN and evento.button == 1)):
@@ -219,17 +223,11 @@ class Juego:
         if self.estado == "menu":
             accion = self.menu.manejar_evento(evento)
             if accion == "nueva":
-                self.nueva_partida()
-                self.partida_activa = True
-                self.estado = "jugando"
+                self.nombre_ui.abrir()
+                self.estado = "nombre"
             elif accion == "cargar":
-                datos = savegame.cargar()
-                if datos is not None:
-                    self.nueva_partida()
-                    savegame.aplicar(self, datos)
-                    self.partida_activa = True
-                    self.estado = "jugando"
-                    self._texto_sobre_jugador("Partida cargada", COLOR_DINERO)
+                self.partidas_ui.abrir(savegame.listar())
+                self.estado = "partidas"
             elif accion == "Opciones":
                 self.opciones.refrescar(self.audio, self.pantalla_completa)
                 self.estado = "opciones"
@@ -237,6 +235,48 @@ class Juego:
                 self._alternar_debug()
             elif accion == "Salir":
                 self.corriendo = False
+
+        elif self.estado == "nombre":
+            accion = self.nombre_ui.manejar_evento(evento)
+            if accion == "cancelar":
+                self.estado = "menu"
+            elif isinstance(accion, tuple) and accion[0] == "crear":
+                nombre = accion[1]
+                if savegame.hay_espacio(nombre):
+                    self.nueva_partida()
+                    self.nombre_partida = nombre
+                    self.partida_activa = True
+                    self.estado = "jugando"
+                    self._guardar_partida()  # reservar el slot ya mismo
+                    self._texto_sobre_jugador(
+                        f"Partida '{nombre}' creada", COLOR_DINERO)
+                else:
+                    self.nombre_ui.mensaje = ("Máximo 5 partidas — borrá "
+                                              "una desde \"Cargar partida\".")
+
+        elif self.estado == "partidas":
+            accion = self.partidas_ui.manejar_evento(evento)
+            if accion == "cerrar":
+                self.estado = "menu"
+            elif isinstance(accion, tuple):
+                entrada = self.partidas_ui.entradas[accion[1]]
+                if accion[0] == "cargar":
+                    datos = savegame.cargar(entrada["ruta"])
+                    if datos is None:
+                        self.partidas_ui.mensaje = "Esa partida está dañada."
+                    else:
+                        self.nueva_partida()
+                        savegame.aplicar(self, datos)
+                        self.nombre_partida = entrada["nombre"]
+                        self.partida_activa = True
+                        self.estado = "jugando"
+                        self._texto_sobre_jugador(
+                            f"Partida '{entrada['nombre']}' cargada",
+                            COLOR_DINERO)
+                elif accion[0] == "borrar":
+                    savegame.borrar(entrada["ruta"])
+                    self.partidas_ui.abrir(savegame.listar())
+                    self.menu.refrescar_guardado(len(savegame.listar()))
 
         elif self.estado == "opciones":
             accion = self.opciones.manejar_evento(evento)
@@ -1041,6 +1081,13 @@ class Juego:
     def _dibujar(self):
         if self.estado == "menu":
             self.menu.dibujar(self.pantalla)
+        elif self.estado == "nombre":
+            texto = self.nombre_ui.texto.strip()
+            pisa = bool(texto) and savegame.existe_nombre(texto)
+            espacio = pisa or len(savegame.listar()) < savegame.MAX_PARTIDAS
+            self.nombre_ui.dibujar(self.pantalla, pisa, espacio)
+        elif self.estado == "partidas":
+            self.partidas_ui.dibujar(self.pantalla)
         elif self.estado == "opciones":
             self.opciones.dibujar(self.pantalla)
         else:

@@ -109,17 +109,19 @@ Receta Especial.
 
 ## Guardado de partidas
 
-- **Menú principal**: "Nueva partida" arranca de cero; "Cargar partida"
-  retoma la guardada (dice "(vacío)" si no hay ninguna).
+- **Hasta 5 partidas con nombre.** "Nueva partida" pide un nombre (tecleá y
+  ENTER); si repetís un nombre, pisás esa partida, y si ya hay 5 te pide
+  borrar una. "Cargar partida" lista los slots con nombre, plata y fecha:
+  ENTER/click carga, **X o click derecho borra** (pide confirmación).
 - **Se guarda solo**: cada 60 segundos jugando, al volver al menú principal
-  y al cerrar la ventana. **Manual**: F5 o "Guardar partida" en la pausa.
+  y al cerrar la ventana — siempre en el slot con el que estás jugando.
+  **Manual**: F5 o "Guardar partida" en la pausa.
 - Se guarda lo permanente (plata, banco, inventario, habilidades,
   franquicias con sus rivales eliminados, receta, misiones cumplidas,
   pedidos en camino, cajas y tu posición). Lo transitorio (persecuciones,
   clientes, punto ilegal) arranca fresco al cargar.
-- El archivo vive en `partidas/partida.json` (un slot; una partida nueva lo
-  pisa en el primer guardado). La carpeta está en el `.gitignore`: cada
-  jugador tiene su propia partida.
+- Los archivos viven en `partidas/<nombre>.json`. La carpeta está en el
+  `.gitignore`: cada jugador tiene sus propias partidas.
 
 ## Modo debug
 
