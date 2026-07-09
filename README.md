@@ -11,8 +11,9 @@ la gastronomía y el mercado negro.
 ## Cómo ejecutar
 
 ```bash
+git clone https://github.com/matiaslinzuain-glitch/fast-empire.git
+cd fast-empire
 pip install pygame
-cd fast_empire
 python3 main.py
 ```
 
@@ -107,10 +108,11 @@ Receta Especial.
 
 ## Modo debug
 
-En el menú principal, **"Modo debug: no/sí"** activa el noclip: Walter
-atraviesa paredes, edificios y el arroyo (sin salirse del mapa). Mientras
-está activo se ve `DEBUG · atravesás paredes` abajo a la izquierda. El
-ajuste sobrevive a las partidas nuevas hasta que lo apagues.
+**F1** en cualquier momento, o las opciones **"Modo debug: no/sí"** del menú
+principal y del menú de pausa, activan el noclip: Walter atraviesa paredes,
+edificios y el arroyo (sin salirse del mapa). Mientras está activo se ve
+`DEBUG · atravesás paredes` abajo a la izquierda. El ajuste sobrevive a las
+partidas nuevas hasta que lo apagues.
 
 ## Estructura del proyecto
 
