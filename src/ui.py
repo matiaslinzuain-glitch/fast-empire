@@ -56,6 +56,9 @@ _MAPA_PNG = {
     "celular":     "icono_celular.png",
     "franquicias": "icono_franquicias.png",
     "receta":      "icono_receta.png",
+    "comida":      "icono_comida.png",
+    "efectivo":    "icono_efectivo.png",
+    "banco":       "icono_banco.png",
 }
 
 _DIR_SPRITES = Path(__file__).resolve().parent.parent / "assets" / "sprites"
@@ -262,10 +265,10 @@ class HUD:
             borde = COLOR_SLOT_SEL if equipada else COLOR_SLOT_BORDE
             pygame.draw.rect(superficie, borde, rect, 2 if equipada else 1)
 
+            # Slot 1 muestra a QUÉ arma cambiarías al presionar 1
             icono = id_item
-            if id_item == "arma" and not (economia.tiene_pistola
-                                          and economia.arma_equipada):
-                icono = "arma" if economia.tiene_pistola else "punos"
+            if id_item == "arma":
+                icono = "punos" if economia.arma_equipada else "arma"
             dibujar_icono(superficie, icono, rect, economia)
 
             # Número de tecla (arriba izq.) y cantidad (abajo der.)
@@ -814,6 +817,15 @@ class PantallaCelular:
     ANCHO_LAND = 524
     ALTO_LAND  = 318
 
+    # Colores y datos de la home screen de cada app
+    _APP_INFO = [
+        # (nombre, color_fondo)
+        ("Comidas",  (210, 100, 30)),
+        ("Ilegales", (120,  35, 35)),
+        ("Mapa",     ( 35,  90, 160)),
+        ("Mensajes", ( 30, 140,  75)),
+    ]
+
     def __init__(self):
         self.fuente       = pygame.font.Font(None, 24)
         self.fuente_chica = pygame.font.Font(None, 20)
@@ -821,30 +833,41 @@ class PantallaCelular:
         self.fuente_mini  = pygame.font.Font(None, 16)
         self.app = 0
         self.seleccion = 0
+        self.en_home = True         # True = pantalla de inicio con íconos
         self.mensaje = ""
         self.color_mensaje = COLOR_TEXTO
         self._minimapa = None       # prerenderizado al primer uso
         self._rects_apps  = []
         self._rects_items = []
+        self._rects_home  = []      # rects de los íconos en la home screen
 
     def abrir(self, app=None):
         if app is not None:
             self.app = app
+            self.en_home = False
+        else:
+            self.en_home = True
         self.seleccion = 0
         self.mensaje = ""
 
     @property
     def es_paisaje(self):
         """El mapa (app 2) gira el celular a horizontal."""
-        return self.app == 2
+        return (not self.en_home) and self.app == 2
 
     # ── eventos ────────────────────────────────────────────
     def manejar_evento(self, evento, economia, tratos, reloj):
         """→ "cerrar" | ("pedido", id) | ("aceptar", t) |
            ("rechazar", t) | None"""
         if evento.type == pygame.KEYDOWN:
-            if evento.key in (pygame.K_ESCAPE, pygame.K_c):
-                return "cerrar"
+            if evento.key == pygame.K_c:
+                return "cerrar"                  # C siempre cierra
+            if self.en_home:
+                return self._ev_home_teclado(evento)
+            if evento.key == pygame.K_ESCAPE:
+                self.en_home = True              # ESC dentro de app → vuelve al home
+                self.seleccion = 0
+                return None
             if evento.key in (pygame.K_a, pygame.K_LEFT):
                 self.app = (self.app - 1) % len(self.APPS)
                 self.seleccion = 0; self.mensaje = ""
@@ -860,6 +883,15 @@ class PantallaCelular:
             elif self.app == 3:
                 return self._ev_mensajes(evento, tratos)
         elif evento.type == pygame.MOUSEBUTTONDOWN and evento.button == 1:
+            if self.en_home:
+                for i, r in enumerate(self._rects_home):
+                    if r.collidepoint(evento.pos):
+                        self.seleccion = i
+                        self.app = i
+                        self.en_home = False
+                        self.mensaje = ""
+                        return None
+                return None
             for i, r in enumerate(self._rects_apps):
                 if r.collidepoint(evento.pos):
                     self.app = i; self.seleccion = 0; self.mensaje = ""
@@ -876,9 +908,32 @@ class PantallaCelular:
                     if self.app == 3:
                         return self._aceptar(tratos)
         elif evento.type == pygame.MOUSEMOTION:
-            for i, r in enumerate(self._rects_items):
-                if r.collidepoint(evento.pos):
-                    self.seleccion = i
+            if self.en_home:
+                for i, r in enumerate(self._rects_home):
+                    if r.collidepoint(evento.pos):
+                        self.seleccion = i
+            else:
+                for i, r in enumerate(self._rects_items):
+                    if r.collidepoint(evento.pos):
+                        self.seleccion = i
+        return None
+
+    def _ev_home_teclado(self, evento):
+        """Navegación de la grilla 2×2 en la home screen."""
+        if evento.key in (pygame.K_ESCAPE,):
+            return "cerrar"
+        if evento.key in (pygame.K_a, pygame.K_LEFT):
+            self.seleccion = (self.seleccion - 1) % 4
+        elif evento.key in (pygame.K_d, pygame.K_RIGHT):
+            self.seleccion = (self.seleccion + 1) % 4
+        elif evento.key in (pygame.K_w, pygame.K_UP):
+            self.seleccion = (self.seleccion - 2) % 4
+        elif evento.key in (pygame.K_s, pygame.K_DOWN):
+            self.seleccion = (self.seleccion + 2) % 4
+        elif evento.key in (pygame.K_RETURN, pygame.K_e, pygame.K_SPACE):
+            self.app = self.seleccion
+            self.en_home = False
+            self.mensaje = ""
         return None
 
     def _ev_lista(self, evento, economia, ids, es_comida):
@@ -945,17 +1000,100 @@ class PantallaCelular:
         pygame.draw.rect(superficie, COLOR_CELULAR_BORDE,
                          (x, y, aw, ah), 2, border_radius=24)
 
-        if self.es_paisaje:
+        if self.en_home:
+            self._home_screen(superficie, x, y, aw, ah, tratos, reloj)
+        elif self.es_paisaje:
             self._frame_land(superficie, x, y, aw, ah,
                              mapa, jugador, tratos, franquicias, reloj)
         else:
             self._frame_port(superficie, x, y, aw, ah,
                              economia, tratos, reloj)
 
-        pie = self.fuente_chica.render(
-            "A/D — app  ·  C/ESC — cerrar", True, COLOR_TEXTO_SUAVE)
+        pie_txt = ("WASD — nav  ·  ENTER — abrir  ·  C — cerrar"
+                   if self.en_home else
+                   "A/D — app  ·  ESC — home  ·  C — cerrar")
+        pie = self.fuente_chica.render(pie_txt, True, COLOR_TEXTO_SUAVE)
         superficie.blit(pie, ((ANCHO_VENTANA - pie.get_width()) // 2,
                               y + ah + 6))
+
+    # ── Home screen (grilla 2×2 de apps) ──────────────────
+    def _home_screen(self, sup, x, y, aw, ah, tratos, reloj):
+        """Pantalla de inicio con íconos de las 4 apps."""
+        pygame.draw.rect(sup, (10, 10, 12),
+                         (x + aw // 2 - 28, y + 10, 56, 13), border_radius=7)
+        pant = pygame.Rect(x + 10, y + 32, aw - 20, ah - 52)
+        pygame.draw.rect(sup, COLOR_PANTALLA_CEL, pant, border_radius=8)
+        self._status_bar(sup, pant, reloj)
+
+        lbl = self.fuente_chica.render("Fast Empire OS", True, COLOR_ORO)
+        sup.blit(lbl, (pant.centerx - lbl.get_width() // 2, pant.y + 28))
+
+        TAM = 72
+        GAP = 20
+        etq_h = 18
+        bloque_h = TAM + GAP + etq_h
+        total_w = TAM * 2 + GAP
+        total_h = bloque_h * 2 - GAP
+        ox = pant.centerx - total_w // 2
+        oy = pant.centery - total_h // 2 + 10
+
+        self._rects_home = []
+        ofertas = sum(1 for t in tratos if t.estado == "oferta")
+
+        for i, (nombre, color) in enumerate(self._APP_INFO):
+            col = i % 2
+            fila = i // 2
+            rx = ox + col * (TAM + GAP)
+            ry = oy + fila * bloque_h
+            rect = pygame.Rect(rx, ry, TAM, TAM)
+            self._rects_home.append(rect)
+
+            pygame.draw.rect(sup, color, rect, border_radius=14)
+            if i == self.seleccion:
+                pygame.draw.rect(sup, COLOR_ORO, rect, 2, border_radius=14)
+
+            cx, cy = rect.centerx, rect.centery
+
+            if i == 0:  # Comidas: bowl con vapor
+                bowl = pygame.Rect(cx - 16, cy - 2, 32, 16)
+                pygame.draw.ellipse(sup, (255, 200, 80), bowl)
+                pygame.draw.ellipse(sup, (200, 140, 40), bowl, 2)
+                for vx in (cx - 8, cx, cx + 8):
+                    for dy in range(3):
+                        pygame.draw.circle(sup, (255, 255, 255),
+                                           (vx, cy - 8 - dy * 4), 1)
+            elif i == 1:  # Ilegales: pastilla bicolor
+                left = pygame.Rect(cx - 18, cy - 9, 18, 18)
+                right = pygame.Rect(cx, cy - 9, 18, 18)
+                pygame.draw.ellipse(sup, (200, 60, 60), left)
+                pygame.draw.ellipse(sup, (200, 200, 200), right)
+                pygame.draw.ellipse(sup, (160, 160, 160),
+                                    pygame.Rect(cx - 18, cy - 9, 36, 18), 2)
+                pygame.draw.line(sup, (120, 120, 120),
+                                 (cx, cy - 9), (cx, cy + 9), 2)
+            elif i == 2:  # Mapa: pin de localización
+                pygame.draw.circle(sup, (200, 220, 255), (cx, cy - 10), 12)
+                pygame.draw.circle(sup, color, (cx, cy - 10), 5)
+                pts = [(cx, cy + 18), (cx - 8, cy - 2), (cx + 8, cy - 2)]
+                pygame.draw.polygon(sup, (200, 220, 255), pts)
+            elif i == 3:  # Mensajes: burbuja de chat
+                bub = pygame.Rect(cx - 18, cy - 14, 36, 24)
+                pygame.draw.rect(sup, (200, 240, 220), bub, border_radius=7)
+                pts = [(cx - 6, cy + 10), (cx - 16, cy + 20), (cx + 4, cy + 10)]
+                pygame.draw.polygon(sup, (200, 240, 220), pts)
+                for dy_off in (-8, -2, 4):
+                    pygame.draw.line(sup, (80, 160, 110),
+                                     (cx - 12, cy + dy_off),
+                                     (cx + 12, cy + dy_off), 1)
+                if ofertas > 0:
+                    bpos = (rect.right - 9, rect.top + 9)
+                    pygame.draw.circle(sup, (220, 40, 40), bpos, 10)
+                    badge = self.fuente_mini.render(str(ofertas), True, (255, 255, 255))
+                    sup.blit(badge, (bpos[0] - badge.get_width() // 2,
+                                    bpos[1] - badge.get_height() // 2))
+
+            etq = self.fuente_chica.render(nombre, True, COLOR_TEXTO)
+            sup.blit(etq, (rect.centerx - etq.get_width() // 2, rect.bottom + 4))
 
     # ── Portrait (apps 0, 1, 3) ────────────────────────────
     def _frame_port(self, sup, x, y, aw, ah, economia, tratos, reloj):

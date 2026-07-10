@@ -22,6 +22,7 @@
 # Ejecutar desde esta carpeta:  python main.py
 # =========================================================
 
+import os
 import random
 
 import pygame
@@ -90,6 +91,9 @@ INTERVALO_OFERTA = (45.0, 90.0)
 
 class Juego:
     def __init__(self):
+        # Nearest-neighbor scaling y DPI nativo: deben ir ANTES de pygame.init
+        os.environ["SDL_RENDER_SCALE_QUALITY"] = "0"
+        os.environ["SDL_WINDOWS_DPI_AWARENESS"] = "permonitorv2"
         # El mixer se configura ANTES de pygame.init (16-bit mono)
         pygame.mixer.pre_init(22050, -16, 1, 512)
         pygame.init()
@@ -126,6 +130,7 @@ class Juego:
         self.fuente_mundo = pygame.font.Font(None, 22)
         self.capa_conos = pygame.Surface((ANCHO_VENTANA, ALTO_VENTANA), pygame.SRCALPHA)
         self.mostrar_panel = True   # TAB lo alterna
+        self._gun_img = None        # sprite de pistola cacheado (16×16)
         # Modo debug (menú principal): atravesar paredes.
         self.debug = False
         # True cuando hay una partida en marcha (para el autosave al salir)
@@ -459,10 +464,13 @@ class Juego:
         toggle_fullscreen(), sobre todo en macOS. Si algún modo no
         está disponible, degrada hasta la ventana simple."""
         self.pantalla_completa = not self.pantalla_completa
-        flags = pygame.SCALED | (pygame.FULLSCREEN if self.pantalla_completa else 0)
         try:
-            self.pantalla = pygame.display.set_mode(
-                (ANCHO_VENTANA, ALTO_VENTANA), flags)
+            if self.pantalla_completa:
+                self.pantalla = pygame.display.set_mode(
+                    (0, 0), pygame.SCALED | pygame.FULLSCREEN)
+            else:
+                self.pantalla = pygame.display.set_mode(
+                    (ANCHO_VENTANA, ALTO_VENTANA), pygame.SCALED)
         except pygame.error:
             self.pantalla_completa = False
             try:
@@ -471,6 +479,16 @@ class Juego:
             except pygame.error:
                 self.pantalla = pygame.display.set_mode(
                     (ANCHO_VENTANA, ALTO_VENTANA))
+
+    def _cargar_gun(self):
+        """Carga y cachea el sprite de la pistola escalado a 16×16."""
+        if self._gun_img is None:
+            from pathlib import Path
+            ruta = Path("assets/sprites/icono_arma.png")
+            if ruta.exists():
+                img = pygame.image.load(str(ruta)).convert_alpha()
+                self._gun_img = pygame.transform.smoothscale(img, (16, 16))
+        return self._gun_img
 
     def _fin_dialogo(self, id_dialogo):
         """Efectos al cerrar cada conversación."""
@@ -1378,7 +1396,8 @@ class Juego:
                 self._signo(comprador, "$", COLOR_PUNTO)
         for enemigo in self.inspectores + self.rivales:
             enemigo.dibujar(self.pantalla, self.camara)
-        self.jugador.dibujar(self.pantalla, self.camara)
+        arma = self._cargar_gun() if self.economia.arma_equipada else None
+        self.jugador.dibujar(self.pantalla, self.camara, arma_img=arma)
         for bala in self.proyectiles:
             bala.dibujar(self.pantalla, self.camara)
         for texto in self.textos:

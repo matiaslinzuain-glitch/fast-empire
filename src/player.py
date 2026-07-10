@@ -95,9 +95,10 @@ class Jugador:
         self.vida = self.vida_max
         self.apuntando = False
 
-    def dibujar(self, superficie, camara):
+    def dibujar(self, superficie, camara, arma_img=None):
         """Sprite pixel art de Walter con caminata animada. La línea
         larga es la mira (solo al apuntar); la corta, el brazo/arma."""
+        import math
         r = camara.aplicar(self.rect)
         centro = pygame.Vector2(r.center)
 
@@ -110,3 +111,11 @@ class Jugador:
         # Brazo/arma hacia donde apunta el mouse
         pygame.draw.line(superficie, (40, 40, 44), centro,
                          centro + self.direccion_mira * 14, 3)
+        if arma_img is not None:
+            angulo = math.degrees(math.atan2(-self.direccion_mira.y,
+                                             self.direccion_mira.x))
+            rotada = pygame.transform.rotate(arma_img, angulo)
+            pos_arma = centro + self.direccion_mira * 16
+            rect_arma = rotada.get_rect(
+                center=(int(pos_arma.x), int(pos_arma.y)))
+            superficie.blit(rotada, rect_arma)
