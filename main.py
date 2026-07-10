@@ -43,12 +43,11 @@ from src.map import (
 from src.player import Jugador
 from src.camera import Camara
 from src.economy import (
-    Economia, Produccion, Caja, Trato, crear_franquicias,
+    Economia, Produccion, Caja, Trato, RedVentas,
     PEDIDOS, TIEMPO_ENTREGA, INGREDIENTES_POR_TANDA, NOMBRE_MED,
     PUNTOS_POR_RIVAL, PUNTOS_POR_ESCAPE, UMBRAL_DESBLOQUEO_MEDS,
-    INGRESO_FRANQUICIA, INTERVALO_FRANQUICIA, PRECIO_CURACION,
-    DATOS_FRANQUICIAS, CURA_SANGUCHE,
-    MAX_TRATOS_ACTIVOS, MAX_OFERTAS,
+    PRECIO_CURACION, CURA_SANGUCHE, LUGARES_VENTA,
+    MAX_TRATOS_ACTIVOS, MAX_OFERTAS, VENTAS_PARA_CONTACTO,
 )
 from src.npcs import ClienteLocal, CompradorIlegal, Proveedor
 from src.dialogue import CajaDialogo
@@ -56,8 +55,8 @@ from src.audio import Audio
 from src.tiempo import RelojJuego
 from src import savegame
 from src.enemies import (
-    Busqueda, Proyectil, RivalGastronomico,
-    crear_inspectores, crear_rivales,
+    Busqueda, Proyectil,
+    crear_inspectores, crear_matones,
 )
 from src.skills import Habilidades
 from src.ui import (
@@ -69,8 +68,9 @@ from src.ui import (
     SuperficieUI, FuenteUI, fijar_escala,
 )
 
-# Nombres legibles de las zonas (para las misiones de limpieza)
-NOMBRES_ZONA = {datos[0]: datos[1] for datos in DATOS_FRANQUICIAS}
+# Nombre legible de una zona de venta (zona_id = índice)
+def nombre_zona(indice):
+    return LUGARES_VENTA[indice][0]
 
 # Radio (en píxeles) para interactuar con E
 RADIO_INTERACCION = TILE * 2
@@ -175,20 +175,20 @@ class Juego:
         self.misiones_cumplidas = 0
         self.timer_oferta = 45.0       # próxima visita con trabajo
 
-        # Franquicias (territorio con ingreso pasivo)
-        self.franquicias = crear_franquicias()
-        self.timer_franquicia = INTERVALO_FRANQUICIA
+        # La Red: conquista de zonas + vendedores propios
+        self.red = RedVentas()
 
-        # Ley y competencia: SIN inspectores hasta que haya denuncias
+        # Ley y competencia: SIN inspectores hasta que haya denuncias.
+        # Los matones aparecen recién cuando El Flaco te cuenta cómo
+        # viene la mano (los sincroniza _sincronizar_matones)
         self.busqueda = Busqueda()
         self.inspectores = []
         self.timer_retirada = 0.0
         self.pos_infraccion = None    # dónde fue la última denuncia
         self.rastreo = 0.0            # rastreo activo tras un homicidio
         self.timer_ping = 0.0
-        self.rivales = crear_rivales()
+        self.rivales = []             # los matones del paso en disputa
         self.proyectiles = []
-        self.respawns = []            # solo rivales
         self.habia_persecucion = False
         self.aviso = None
         self.aviso_timer = 0.0
@@ -375,7 +375,8 @@ class Juego:
 
         elif self.estado == "celular":
             accion = self.celular.manejar_evento(
-                evento, self.economia, self.tratos, self.reloj_juego)
+                evento, self.economia, self.tratos, self.reloj_juego,
+                self.red)
             if accion == "cerrar":
                 self.estado = "jugando"
             elif isinstance(accion, tuple):
@@ -562,7 +563,8 @@ class Juego:
     def _generar_mision(self):
         """Arma una misión al azar según el estado del mundo."""
         tipos = ["reparto", "quimicos"]
-        zonas_vivas = [r.zona_id for r in self.rivales if r.zona_id]
+        zonas_vivas = [r.zona_id for r in self.rivales
+                       if r.zona_id is not None]
         if zonas_vivas:
             tipos.append("limpieza")
         tipo = random.choice(tipos)
@@ -579,7 +581,7 @@ class Juego:
         zona = random.choice(zonas_vivas)
         return {"tipo": "limpieza", "zona": zona, "objetivo": 1, "progreso": 0,
                 "timer": 150, "recompensa": 200, "puntos": 8,
-                "desc": f"Eliminá al contrabandista de {NOMBRES_ZONA[zona]}"}
+                "desc": f"Eliminá al matón de {nombre_zona(zona)}"}
 
     def _avanzar_mision(self, cantidad=1):
         """Suma progreso y resuelve la misión si se completó."""
@@ -664,7 +666,9 @@ class Juego:
             ofertas = sum(1 for t in self.tratos if t.estado == "oferta")
             if (ofertas < MAX_OFERTAS
                     and len(self._tratos_aceptados()) < MAX_TRATOS_ACTIVOS):
-                self.tratos.append(Trato(self.reloj_juego))
+                # Solo proponen encuentros en zonas que ya manejás
+                self.tratos.append(Trato(self.reloj_juego,
+                                         self.red.lugares_para_tratos()))
                 self.audio.reproducir("pedido")
                 self._texto_sobre_jugador(
                     "Mensaje nuevo en el celular (C)", COLOR_PUNTO)

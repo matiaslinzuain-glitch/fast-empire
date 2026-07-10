@@ -109,7 +109,6 @@ class Economia:
         # (que aparece al superar UMBRAL_DESBLOQUEO_MEDS de comida)
         self.meds_desbloqueados = False
         self.receta_especial = False  # la enseña el Proveedor (1ra misión)
-        self.franquicias = 0     # puestos comprados (ingreso pasivo)
         # Lo depositado en el banco NO se pierde en arrestos ni
         # muertes (esas penas solo tocan el efectivo `dinero`)
         self.banco = 0
@@ -271,49 +270,191 @@ class Caja:
                          (r.x, r.centery - 2, r.width, 4))
 
 
-# --- Franquicias: territorio con ingreso pasivo ---
-# Para comprar un puesto hay que eliminar al rival de esa zona y
-# cerrar el trato antes de que llegue su reemplazo (60 segundos).
-# Comprado el puesto, esa zona queda tuya: el rival no vuelve.
-INGRESO_FRANQUICIA = 20      # $ por puesto...
-INTERVALO_FRANQUICIA = 30.0  # ...cada tantos segundos
+# --- La Red de venta: zonas, matones y vendedores ---
+# La ciudad se conquista EN ORDEN. La zona 1 (Parque del Norte) es
+# libre: vendé ahí VENTAS_PARA_CONTACTO veces y "El Flaco" te pasa
+# su contacto. Cada zona siguiente está custodiada por un matón:
+# hay que eliminar a TODOS los del paso para conquistarla(s). En
+# una zona conquistada podés COLOCAR a su vendedor, que vende solo
+# lo que le vayas depositando (menos su comisión). Y cada vendedor,
+# con ventas suficientes, te presenta al contacto siguiente.
+VENTAS_PARA_CONTACTO = 7      # ventas que destraban un contacto nuevo
+COMISION_VENDEDOR = 0.25      # lo que se queda cada vendedor
+INTERVALO_VENTA_RED = (45.0, 75.0)  # seg reales entre ventas de cada uno
 
-DATOS_FRANQUICIAS = [
-    # (id de zona — coincide con el rival —, nombre, tile, precio)
-    ("mercado", "Puesto del Mercado",    (25, 21), 400),
-    ("campo",   "Parada del Campo",      (50, 24), 550),
-    ("sur",     "Kiosco del Sur",        (37, 38), 700),
-    ("puerto",  "Depósito del Puerto",   (40, 50), 850),
-    ("feria",   "Puesto de la Feria",    (44, 62), 950),
-    ("muelle",  "Depósito del Muelle",   (36, 94), 1100),
-]
+# Pasos de conquista (índices de LUGARES_VENTA; la zona 0 es libre).
+# Los grupos [5,6], [7,8] y [10,11,12] se desbloquean juntos
+# (zonas 6+7, 8+9 y 11+12+13 hablando en números de mapa).
+PASOS_CONQUISTA = [[1], [2], [3], [4], [5, 6], [7, 8], [9], [10, 11, 12]]
+
+NOMBRES_VENDEDORES = ["El Flaco", "La Turca", "El Ruso", "Gaita",
+                      "El Primo", "Morocho", "Santi B.", "La Piba",
+                      "Don Nadie", "K.", "El Gallego", "Chino"]
 
 
-class Franquicia:
-    """Puesto de comida comprable. Sin dueño se ve gris y cerrado;
-    comprado, con toldo dorado y luz adentro."""
+class Vendedor:
+    """Un dealer de la red: atado a SU zona. Vende solo lo que le
+    depositás y se queda una comisión."""
 
-    def __init__(self, id_zona, nombre, tile, precio):
-        self.id_zona = id_zona
+    def __init__(self, zona_idx, nombre):
+        self.zona_idx = zona_idx
         self.nombre = nombre
-        self.rect = pygame.Rect(tile[0] * TILE + 2, tile[1] * TILE + 4, 28, 24)
-        self.precio = precio
-        self.comprada = False
+        self.descubierto = False   # ya tenés su contacto
+        self.colocado = False      # ya trabaja en su zona
+        self.stock_nat = 0
+        self.stock_quim = 0
+        self.ventas = 0
+        self.timer = random.uniform(*INTERVALO_VENTA_RED)
 
-    def dibujar(self, superficie, camara):
-        r = camara.aplicar(self.rect)
-        # Cuerpo del puesto
-        pygame.draw.rect(superficie, (104, 72, 48), r)
-        # Toldo: gris cerrado / dorado abierto
-        toldo = (222, 178, 84) if self.comprada else (96, 96, 100)
-        pygame.draw.rect(superficie, toldo, (r.x - 2, r.y - 4, r.width + 4, 8))
-        # Ventanita: iluminada solo si está operando
-        luz = (255, 226, 130) if self.comprada else (34, 30, 26)
-        pygame.draw.rect(superficie, luz, (r.x + 8, r.y + 9, 12, 8))
+    @property
+    def nombre_zona(self):
+        return LUGARES_VENTA[self.zona_idx][0]
+
+    @property
+    def stock_total(self):
+        return self.stock_nat + self.stock_quim
+
+    def a_dict(self):
+        return {"zona": self.zona_idx, "nombre": self.nombre,
+                "descubierto": self.descubierto, "colocado": self.colocado,
+                "nat": self.stock_nat, "quim": self.stock_quim,
+                "ventas": self.ventas}
+
+    @classmethod
+    def desde_dict(cls, datos):
+        v = cls(datos["zona"], datos["nombre"])
+        v.descubierto = datos.get("descubierto", False)
+        v.colocado = datos.get("colocado", False)
+        v.stock_nat = datos.get("nat", 0)
+        v.stock_quim = datos.get("quim", 0)
+        v.ventas = datos.get("ventas", 0)
+        return v
 
 
-def crear_franquicias():
-    return [Franquicia(*datos) for datos in DATOS_FRANQUICIAS]
+class RedVentas:
+    """El estado completo de la conquista de la ciudad."""
+
+    def __init__(self):
+        self.ventas_parque = 0       # tus ventas en la zona 1
+        self.paso = 0                # índice del paso en disputa
+        self.guardias_muertas = set()  # zonas del paso ya limpiadas
+        self.vendedores = [Vendedor(i + 1, NOMBRES_VENDEDORES[i])
+                           for i in range(len(NOMBRES_VENDEDORES))]
+
+    @property
+    def flaco_desbloqueado(self):
+        return self.vendedores[0].descubierto
+
+    def zonas_conquistadas(self):
+        return [z for p in PASOS_CONQUISTA[:self.paso] for z in p]
+
+    def zonas_en_disputa(self):
+        """Zonas del paso actual que todavía tienen matón vivo."""
+        if not self.flaco_desbloqueado or self.paso >= len(PASOS_CONQUISTA):
+            return []
+        return [z for z in PASOS_CONQUISTA[self.paso]
+                if z not in self.guardias_muertas]
+
+    def lugares_para_tratos(self):
+        """Dónde pueden proponerte tratos: el Parque + lo conquistado."""
+        return [0] + self.zonas_conquistadas()
+
+    def registrar_venta_parque(self):
+        """Una venta tuya en el Parque del Norte. Devuelve "flaco" en
+        la venta que desbloquea el primer contacto."""
+        if self.flaco_desbloqueado:
+            return None
+        self.ventas_parque += 1
+        if self.ventas_parque >= VENTAS_PARA_CONTACTO:
+            self.vendedores[0].descubierto = True
+            return "flaco"
+        return None
+
+    def eliminar_guardia(self, zona_idx):
+        """Cayó un matón. Devuelve los nombres de las zonas nuevas si
+        con este se completó el paso; None si todavía faltan."""
+        self.guardias_muertas.add(zona_idx)
+        paso = PASOS_CONQUISTA[self.paso]
+        if all(z in self.guardias_muertas for z in paso):
+            self.paso += 1
+            self.guardias_muertas = set()
+            return [LUGARES_VENTA[z][0] for z in paso]
+        return None
+
+    def vendedor_de(self, zona_idx):
+        return self.vendedores[zona_idx - 1] if zona_idx >= 1 else None
+
+    def colocar(self, vendedor):
+        """Lo manda a trabajar a su zona (si está conquistada)."""
+        if (not vendedor.descubierto or vendedor.colocado
+                or vendedor.zona_idx not in self.zonas_conquistadas()):
+            return False
+        vendedor.colocado = True
+        return True
+
+    def depositar(self, vendedor, tipo, economia, cantidad=1):
+        """Le dejás mercadería tuya para que la venda."""
+        if economia.stock_med(tipo) < cantidad:
+            return False
+        if tipo == "med_nat":
+            economia.med_nat -= cantidad
+            vendedor.stock_nat += cantidad
+        else:
+            economia.med_quim -= cantidad
+            vendedor.stock_quim += cantidad
+        return True
+
+    def actualizar(self, dt, economia):
+        """Ventas pasivas de los colocados + cadena de contactos.
+        Devuelve eventos [("venta", vendedor, $), ("contacto", v, 0)]."""
+        eventos = []
+        for vendedor in self.vendedores:
+            if not (vendedor.colocado and vendedor.stock_total > 0):
+                continue
+            vendedor.timer -= dt
+            if vendedor.timer > 0:
+                continue
+            vendedor.timer = random.uniform(*INTERVALO_VENTA_RED)
+            if vendedor.stock_nat >= vendedor.stock_quim:
+                tipo = "med_nat"
+                vendedor.stock_nat -= 1
+            else:
+                tipo = "med_quim"
+                vendedor.stock_quim -= 1
+            ganancia = round(VENTA_MED[tipo] * (1 - COMISION_VENDEDOR))
+            economia.dinero += ganancia
+            economia.total_ilegal += ganancia
+            vendedor.ventas += 1
+            eventos.append(("venta", vendedor, ganancia))
+        # El último contacto descubierto presenta al siguiente cuando
+        # junta ventas suficientes (de a uno, en orden)
+        for i in range(1, len(self.vendedores)):
+            vendedor = self.vendedores[i]
+            anterior = self.vendedores[i - 1]
+            if (not vendedor.descubierto and anterior.descubierto
+                    and anterior.ventas >= VENTAS_PARA_CONTACTO):
+                vendedor.descubierto = True
+                eventos.append(("contacto", vendedor, 0))
+                break
+        return eventos
+
+    def a_dict(self):
+        return {"ventas_parque": self.ventas_parque, "paso": self.paso,
+                "guardias_muertas": sorted(self.guardias_muertas),
+                "vendedores": [v.a_dict() for v in self.vendedores]}
+
+    @classmethod
+    def desde_dict(cls, datos):
+        red = cls()
+        if not datos:
+            return red
+        red.ventas_parque = datos.get("ventas_parque", 0)
+        red.paso = datos.get("paso", 0)
+        red.guardias_muertas = set(datos.get("guardias_muertas", []))
+        guardados = datos.get("vendedores", [])
+        for i, v_datos in enumerate(guardados[:len(red.vendedores)]):
+            red.vendedores[i] = Vendedor.desde_dict(v_datos)
+        return red
 
 
 # --- Lugares de venta (para acordar tratos por celular) ---
@@ -354,9 +495,13 @@ class Trato:
     """Una venta acordada por celular: comprador, mercadería, lugar
     y hora. Estados: oferta → aceptado → encuentro → hecho/fallido."""
 
-    def __init__(self, reloj):
+    def __init__(self, reloj, lugares_permitidos=None):
         self.comprador_nombre = random.choice(_NOMBRES_COMPRADOR)
-        self.lugar_idx = random.randrange(len(LUGARES_VENTA))
+        # Solo proponen encuentros en zonas que la red ya maneja
+        if lugares_permitidos:
+            self.lugar_idx = random.choice(lugares_permitidos)
+        else:
+            self.lugar_idx = random.randrange(len(LUGARES_VENTA))
         self.tipo = random.choice(("med_nat", "med_quim"))
         self.cantidad = random.randint(2, 5)
         self.precio_unit = round(VENTA_MED[self.tipo]

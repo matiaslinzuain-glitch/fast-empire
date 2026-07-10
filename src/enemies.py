@@ -505,15 +505,18 @@ def crear_inspectores(cantidad=None, cerca_de=None):
     return [InspectorSanitario(ruta) for ruta in rutas]
 
 
-def crear_rivales():
-    """Los contrabandistas de cada zona con franquicia en venta.
-    El zona_id los ata a su puesto (eliminarlos abre la compra).
-    La Fase 11 suma la Feria del Sur y el Muelle Nuevo."""
-    return [
-        RivalGastronomico(23 * TILE, 22 * TILE, radio_hogar=3 * TILE, zona_id="mercado"),
-        RivalGastronomico(52 * TILE, 21 * TILE, radio_hogar=4 * TILE, zona_id="campo"),
-        RivalGastronomico(36 * TILE, 36 * TILE, radio_hogar=3 * TILE, zona_id="sur"),
-        RivalGastronomico(44 * TILE, 50 * TILE, radio_hogar=4 * TILE, zona_id="puerto"),
-        RivalGastronomico(48 * TILE, 62 * TILE, radio_hogar=4 * TILE, zona_id="feria"),
-        RivalGastronomico(38 * TILE, 94 * TILE, radio_hogar=4 * TILE, zona_id="muelle"),
-    ]
+def crear_matones(indices_zona):
+    """Los matones que custodian las zonas de venta del paso en
+    disputa (sistema de la Red: zona_id = índice de LUGARES_VENTA).
+    Cada uno ronda el centro de su zona y NO respawnea: eliminarlo
+    es progreso permanente de la conquista."""
+    from .economy import LUGARES_VENTA
+    matones = []
+    for indice in indices_zona:
+        col, fila, ancho, alto = LUGARES_VENTA[indice][1]
+        cx = int((col + ancho / 2) * TILE)
+        cy = int((fila + alto / 2) * TILE)
+        radio = max(ancho, alto) * TILE // 2 + TILE
+        matones.append(RivalGastronomico(cx, cy, radio_hogar=radio,
+                                         zona_id=indice))
+    return matones
