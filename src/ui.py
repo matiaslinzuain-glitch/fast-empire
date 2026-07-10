@@ -16,6 +16,7 @@
 # =========================================================
 
 import pygame
+from pathlib import Path
 
 from .settings import (
     ANCHO_VENTANA, ALTO_VENTANA, TILE,
@@ -37,6 +38,46 @@ from .economy import (
     NOMBRE_MED,
 )
 from .skills import ARBOL
+
+
+# ---------------------------------------------------------
+# Íconos PNG: carga lazy, caché por (id, tamaño)
+# ---------------------------------------------------------
+_ICONOS_CACHE = {}   # (id_item, tam) -> Surface  ó  None si falta el archivo
+
+_MAPA_PNG = {
+    "arma":        "icono_arma.png",
+    "punos":       "icono_punos.png",
+    "balas":       "icono_balas.png",
+    "ingredientes":"icono_ingredientes.png",
+    "sanguche":    "icono_sanguche.png",
+    "med_nat":     "icono_med_nat.png",
+    "med_quim":    "icono_med_quim.png",
+    "celular":     "icono_celular.png",
+    "franquicias": "icono_franquicias.png",
+    "receta":      "icono_receta.png",
+}
+
+_DIR_SPRITES = Path(__file__).resolve().parent.parent / "assets" / "sprites"
+
+
+def _obtener_icono(id_item, tam):
+    """Devuelve el ícono PNG escalado a tam×tam, o None si no existe."""
+    clave = (id_item, tam)
+    if clave in _ICONOS_CACHE:
+        return _ICONOS_CACHE[clave]
+    nombre = _MAPA_PNG.get(id_item)
+    resultado = None
+    if nombre:
+        ruta = _DIR_SPRITES / nombre
+        if ruta.exists():
+            try:
+                img = pygame.image.load(str(ruta)).convert_alpha()
+                resultado = pygame.transform.smoothscale(img, (tam, tam))
+            except Exception:
+                pass
+    _ICONOS_CACHE[clave] = resultado
+    return resultado
 
 
 def _panel(ancho, alto, alpha=175):
@@ -68,10 +109,17 @@ class TextoFlotante:
 
 
 # ---------------------------------------------------------
-# Íconos del inventario (dibujados a mano, sin archivos)
+# Íconos del inventario
 # ---------------------------------------------------------
 def dibujar_icono(superficie, id_item, rect, economia=None):
-    """Ícono pixelado de cada ítem, centrado en el rect."""
+    """Dibuja el ícono del ítem en rect. Usa el PNG si existe, si no
+    cae al dibujo procedural."""
+    tam = min(rect.width, rect.height) - 8
+    png = _obtener_icono(id_item, tam)
+    if png is not None:
+        superficie.blit(png, (rect.centerx - tam // 2, rect.centery - tam // 2))
+        return
+
     cx, cy = rect.center
     if id_item == "arma":
         color = COLOR_TEXTO if (economia and economia.tiene_pistola) \
