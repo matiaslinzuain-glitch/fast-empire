@@ -103,6 +103,10 @@ class Juego:
     def __init__(self):
         # DPI nativo en Windows: debe definirse ANTES de pygame.init
         os.environ["SDL_WINDOWS_DPI_AWARENESS"] = "permonitorv2"
+        # macOS: sin "Espacios" para el fullscreen. El Espacio de
+        # pantalla completa de macOS deja la ventana SDL sin foco de
+        # teclado (el juego queda sordo y ESC te saca del juego).
+        os.environ["SDL_VIDEO_MAC_FULLSCREEN_SPACES"] = "0"
         # El mixer se configura ANTES de pygame.init (16-bit mono)
         pygame.mixer.pre_init(22050, -16, 1, 512)
         pygame.init()
@@ -547,6 +551,10 @@ class Juego:
         # copia crudo (bloques). Alfa opaco antes de componer.
         self.pantalla.fill((0, 0, 0, 255),
                            special_flags=pygame.BLEND_RGBA_MAX)
+        # Limpiar las franjas negras de la pantalla completa: si no,
+        # quedan restos de frames viejos (letras cortadas en el borde)
+        if self.dx or self.dy:
+            self.ventana.fill((0, 0, 0))
         if self._lienzo_grande is None:
             self.ventana.blit(self.pantalla, (0, 0))
         else:

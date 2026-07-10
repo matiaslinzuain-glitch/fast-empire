@@ -239,9 +239,15 @@ class SuperficieUI:
         self.textos.clear()
 
     def volcar(self, destino, escala, dx=0, dy=0):
-        """Dibuja el texto encolado sobre la ventana real, nítido."""
+        """Dibuja el texto encolado sobre la ventana real, nítido.
+        Recorta al área del juego: el texto nunca pisa las franjas
+        negras de la pantalla completa."""
+        clip_previo = destino.get_clip()
+        destino.set_clip((dx, dy, round(ANCHO_VENTANA * escala),
+                          round(ALTO_VENTANA * escala)))
         for texto, x, y in self.textos:
             texto.dibujar_nativo(destino, x, y, escala, dx, dy)
+        destino.set_clip(clip_previo)
         self.textos.clear()
 
 
@@ -1254,8 +1260,10 @@ class PantallaCelular:
                    if self.en_home else
                    "ESC — volver al home  ·  C — cerrar")
         pie = self.fuente_chica.render(pie_txt, True, COLOR_TEXTO_SUAVE)
-        superficie.blit(pie, ((ANCHO_VENTANA - pie.get_width()) // 2,
-                              y + ah + 6))
+        # Clampeado: que el pie nunca quede cortado por el borde de
+        # abajo (con el teléfono vertical y+ah+6 se pasaba de 540)
+        py = min(y + ah + 6, ALTO_VENTANA - pie.get_height() - 2)
+        superficie.blit(pie, ((ANCHO_VENTANA - pie.get_width()) // 2, py))
 
     # ── Home screen (grilla 2×2 de apps) ──────────────────
     def _home_screen(self, sup, x, y, aw, ah, tratos, reloj,
