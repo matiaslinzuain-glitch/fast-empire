@@ -368,7 +368,7 @@ class RivalGastronomico(Enemigo):
         super().__init__(x, y, self.VIDA, self.VELOCIDAD)
         self.hogar = pygame.Vector2(x, y)    # centro de su territorio
         self.radio_hogar = radio_hogar
-        self.zona_id = zona_id               # ata al rival con su franquicia
+        self.zona_id = zona_id               # ata al matón con su zona de venta
         self.estado = "deambular"  # deambular | atacar | cazar
         self.cooldown_disparo = 0.0
         self.timer_caza = 0.0
@@ -505,18 +505,34 @@ def crear_inspectores(cantidad=None, cerca_de=None):
     return [InspectorSanitario(ruta) for ruta in rutas]
 
 
+# Cuántos matones custodian cada zona (clave = índice de
+# LUGARES_VENTA; el número de mapa es el índice + 1). Para subir la
+# dificultad de las últimas zonas basta con cambiar el número acá
+# (p. ej. las zonas 10-13 a 4). La zona 1 (índice 0) es libre.
+MATONES_POR_ZONA = {
+    1: 1,  2: 1,           # zonas 2-3: un matón
+    3: 2,  4: 2,  5: 2,    # zonas 4-6: dos matones
+    6: 3,  7: 3,  8: 3,    # zonas 7-9: tres matones
+    9: 3, 10: 3, 11: 3, 12: 3,   # zonas 10-13: tres matones
+}
+
+
 def crear_matones(indices_zona):
-    """Los matones que custodian las zonas de venta del paso en
-    disputa (sistema de la Red: zona_id = índice de LUGARES_VENTA).
-    Cada uno ronda el centro de su zona y NO respawnea: eliminarlo
-    es progreso permanente de la conquista."""
+    """Los matones que custodian las zonas de venta en disputa
+    (sistema de la Red: zona_id = índice de LUGARES_VENTA). Cada
+    zona recibe MATONES_POR_ZONA matones repartidos a lo ancho de
+    la base, y todos rondan el centro de su zona. La zona se limpia
+    recién cuando cae el ÚLTIMO de ellos."""
     from .economy import LUGARES_VENTA
     matones = []
     for indice in indices_zona:
         col, fila, ancho, alto = LUGARES_VENTA[indice][1]
-        cx = int((col + ancho / 2) * TILE)
         cy = int((fila + alto / 2) * TILE)
         radio = max(ancho, alto) * TILE // 2 + TILE
-        matones.append(RivalGastronomico(cx, cy, radio_hogar=radio,
-                                         zona_id=indice))
+        n = MATONES_POR_ZONA.get(indice, 1)
+        for i in range(n):
+            # Repartidos a lo ancho (con n=1 queda en el centro)
+            cx = int((col + ancho * (i + 1) / (n + 1)) * TILE)
+            matones.append(RivalGastronomico(cx, cy, radio_hogar=radio,
+                                             zona_id=indice))
     return matones

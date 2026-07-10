@@ -16,7 +16,15 @@
 #   M = mostrador del local (sólido; se atiende desde atrás con E)
 #   F = teléfono del local (sólido, interactuable: abre el celular)
 #   T = almacén (sólido, interactuable: armas/curas)
+#   D = trampilla del local (sólida, interactuable: TELETRANSPORTA
+#       al sótano — una habitación real bajo la ciudad)
 #   B = banco  ·  S = clínica  ·  w = agua
+#   --- el sótano (filas 100-117, instancia aislada) ---
+#   N = vacío del subsuelo (negro sólido, rodea al cuarto)
+#   s = piso del sótano (transitable)
+#   U = escalera de subida (sólida, interactuable: vuelve al local)
+#   m = maceta  ·  b = mesa de armado  ·  l = laboratorio
+#   e = estante (todos sólidos, interactuables por proximidad)
 #   p = piso de madera del local (transitable)
 #   . = calle de asfalto (transitable)
 #   , = pasto (transitable)
@@ -45,7 +53,8 @@ from .settings import (
 )
 
 ANCHO_MAPA = 120   # tiles
-ALTO_MAPA = 100
+FILAS_CIUDAD = 100     # la ciudad ocupa las filas 0-99
+ALTO_MAPA = 118        # + 18 filas de subsuelo (el sótano y su vacío)
 
 # --- Piezas de la ciudad original (columnas 1 a 44 de cada fila) ---
 _C2 = ".."                      # calle vertical de 2 tiles
@@ -132,7 +141,7 @@ _MAPA_OESTE = [
     _fila(_local("XppppppppppppX"), campo=_CAMPO_GRANJA),
     _fila(_local("XppppppppppppX", ",,,,,,,,AA,,,,,,,,,,,,,,,,,,"),
           campo=_CAMPO_GRANJA),
-    _fila(_local("XppppppppppppX")),
+    _fila(_local("XDpppppppppppX")),                       # D: sótano
     _fila(_local("XXXXppXXXXXXXX"), campo=_CAMPO_COSTA),   # puerta en (5-6, 8)
     # --- Avenida norte (filas 9-10) ---
     _fila(_CALLE44, campo=_CAMPO_COSTA),
@@ -324,10 +333,46 @@ assert len(_SUR_NUEVO) == 43  # filas 57-99
 
 MAPA = [_MAPA_OESTE[f] + _ESTE.get(f, "X" * 45) for f in range(57)] + _SUR_NUEVO
 
+# --- El sótano (filas 100-117): una INSTANCIA aislada ---
+# No es un menú: es un cuarto real en el subsuelo del mapa. Todo lo
+# que lo rodea es vacío negro sólido (tile N) y hay filas de colchón
+# arriba y abajo para que la cámara — que en el subsuelo usa SUS
+# propios límites (ver camera.py) — jamás alcance a mostrar la
+# ciudad. La trampilla del local (D) y la escalera de acá (U) se
+# teletransportan mutuamente (main.py mueve las coordenadas del
+# jugador: misma grilla, instancia visualmente separada).
+_SOTANO_INTERIOR = [
+    "NNNNNNNNNNNN",
+    "NUssssssssmN",     # U: escalera de subida · m: maceta
+    "NssssssssssN",
+    "NbsssssssslN",     # b: mesa de armado · l: laboratorio
+    "NssssssssssN",
+    "NsssseessssN",     # e: el estante de guardado
+    "NNNNNNNNNNNN",
+]
+_COL_SOTANO = 2         # esquina izquierda del cuarto
+_FILA_SOTANO = 105      # fila del techo del cuarto (5 de colchón)
+_VACIO = "N" * ANCHO_MAPA
+MAPA.extend([_VACIO] * (_FILA_SOTANO - FILAS_CIUDAD))
+for _linea in _SOTANO_INTERIOR:
+    MAPA.append("N" * _COL_SOTANO + _linea
+                + "N" * (ANCHO_MAPA - _COL_SOTANO - len(_linea)))
+MAPA.extend([_VACIO] * (ALTO_MAPA - len(MAPA)))
+
 assert len(MAPA) == ALTO_MAPA
 assert {len(f) for f in MAPA} == {ANCHO_MAPA}, "Filas con anchos distintos"
 
-TILES_SOLIDOS = ("X", "H", "A", "C", "T", "M", "F", "w", "B", "S", "k")
+TILES_SOLIDOS = ("X", "H", "A", "C", "T", "M", "F", "w", "B", "S", "k",
+                 "D", "N", "U", "m", "b", "l", "e")
+
+# Frontera vertical ciudad/subsuelo (para la cámara por zonas)
+Y_SUBSUELO = FILAS_CIUDAD * TILE
+
+# Puntos del teletransporte local ↔ sótano (píxeles de mundo):
+# al bajar aparecés al lado de la escalera; al subir, junto a la
+# trampilla del local
+PUNTO_SOTANO = (4.3 * TILE, (_FILA_SOTANO + 1.2) * TILE)
+PUNTO_TRAMPILLA = (3.2 * TILE, 6.8 * TILE)
 
 # --- Puntos de referencia del local (en píxeles de mundo) ---
 PUNTO_PUERTA = (5.5 * TILE, 8.5 * TILE)       # vano de la puerta
@@ -370,6 +415,13 @@ class Mapa:
         self.tiles_telefono = []
         self.tiles_banco = []
         self.tiles_hospital = []
+        self.tiles_sotano = []       # la trampilla del local (D)
+        # Props físicos del sótano (interactuables por proximidad)
+        self.tiles_subida = []       # la escalera de vuelta (U)
+        self.tiles_maceta = []
+        self.tiles_mesa = []
+        self.tiles_laboratorio = []
+        self.tiles_estante = []
 
         for fila, linea in enumerate(MAPA):
             for col, tile in enumerate(linea):
@@ -389,6 +441,18 @@ class Mapa:
                     self.tiles_banco.append(rect)
                 elif tile == "S":
                     self.tiles_hospital.append(rect)
+                elif tile == "D":
+                    self.tiles_sotano.append(rect)
+                elif tile == "U":
+                    self.tiles_subida.append(rect)
+                elif tile == "m":
+                    self.tiles_maceta.append(rect)
+                elif tile == "b":
+                    self.tiles_mesa.append(rect)
+                elif tile == "l":
+                    self.tiles_laboratorio.append(rect)
+                elif tile == "e":
+                    self.tiles_estante.append(rect)
 
     def es_solido_en(self, x, y):
         """True si el punto (px de mundo) cae sobre un tile sólido.
@@ -477,6 +541,73 @@ class Mapa:
             pygame.draw.rect(superficie, COLOR_TELEFONO, rect.inflate(-8, -8))
             pygame.draw.rect(superficie, COLOR_TELEFONO_LUZ,
                              (rect.x + 12, rect.y + 12, 8, 6))
+        elif tile == "D":
+            # Trampilla del local: madera con escalones hacia abajo
+            pygame.draw.rect(superficie, COLOR_PISO_LOCAL, rect)
+            pygame.draw.rect(superficie, (52, 40, 30), rect.inflate(-4, -4))
+            for i in range(3):
+                pygame.draw.rect(superficie, (30, 22, 16),
+                                 (rect.x + 6, rect.y + 7 + i * 7,
+                                  rect.width - 12, 4))
+        elif tile == "N":
+            # El vacío del subsuelo: negro sólido, sin detalles
+            pygame.draw.rect(superficie, (0, 0, 0), rect)
+        elif tile == "s":
+            # Piso del sótano: cemento oscuro con juntas
+            pygame.draw.rect(superficie, (40, 36, 44), rect)
+            pygame.draw.rect(superficie, (33, 30, 37),
+                             (rect.x, rect.y, rect.width, 2))
+            pygame.draw.rect(superficie, (33, 30, 37),
+                             (rect.x, rect.y, 2, rect.height))
+        elif tile == "U":
+            # Escalera de subida: escalones cada vez más claros
+            pygame.draw.rect(superficie, (40, 36, 44), rect)
+            for i in range(4):
+                gris = 60 + i * 22
+                pygame.draw.rect(superficie, (gris, gris - 6, gris - 14),
+                                 (rect.x + 3, rect.bottom - 7 - i * 7,
+                                  rect.width - 6, 6))
+        elif tile == "m":
+            # La maceta: terracota con tierra (la planta se dibuja
+            # encima desde main.py según el estado del cultivo)
+            pygame.draw.rect(superficie, (40, 36, 44), rect)
+            pygame.draw.polygon(superficie, (150, 88, 52),
+                                [(rect.x + 6, rect.y + 12),
+                                 (rect.right - 6, rect.y + 12),
+                                 (rect.right - 10, rect.bottom - 4),
+                                 (rect.x + 10, rect.bottom - 4)])
+            pygame.draw.rect(superficie, (70, 50, 34),
+                             (rect.x + 8, rect.y + 12, rect.width - 16, 5))
+        elif tile == "b":
+            # Mesa de armado: madera con una bolsita arriba
+            pygame.draw.rect(superficie, (40, 36, 44), rect)
+            pygame.draw.rect(superficie, (110, 78, 48),
+                             (rect.x + 2, rect.y + 8, rect.width - 4,
+                              rect.height - 12))
+            pygame.draw.rect(superficie, (134, 96, 60),
+                             (rect.x + 2, rect.y + 8, rect.width - 4, 6))
+            pygame.draw.rect(superficie, (190, 200, 210),
+                             (rect.x + 8, rect.y + 11, 9, 7))
+        elif tile == "l":
+            # Laboratorio: mesada metálica con frascos violetas
+            pygame.draw.rect(superficie, (40, 36, 44), rect)
+            pygame.draw.rect(superficie, (88, 92, 104),
+                             (rect.x + 2, rect.y + 10, rect.width - 4,
+                              rect.height - 14))
+            pygame.draw.rect(superficie, (150, 90, 190),
+                             (rect.x + 7, rect.y + 4, 6, 10))
+            pygame.draw.rect(superficie, (120, 70, 160),
+                             (rect.x + 18, rect.y + 6, 6, 8))
+        elif tile == "e":
+            # El estante: repisas con cajitas
+            pygame.draw.rect(superficie, (40, 36, 44), rect)
+            pygame.draw.rect(superficie, (76, 56, 38), rect.inflate(-4, -2))
+            for i in range(3):
+                y_rep = rect.y + 5 + i * 9
+                pygame.draw.rect(superficie, (120, 92, 60),
+                                 (rect.x + 4, y_rep, rect.width - 8, 3))
+                pygame.draw.rect(superficie, (170, 150, 110),
+                                 (rect.x + 7 + (i * 5) % 10, y_rep - 4, 6, 4))
         elif tile == "T":
             # Almacén del barrio con toldo rojo
             pygame.draw.rect(superficie, COLOR_CALLE, rect)

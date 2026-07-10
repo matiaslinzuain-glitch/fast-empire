@@ -190,6 +190,58 @@ class Proveedor(_Peaton):
                           self.paleta, self)
 
 
+class VendedorZona(_Peaton):
+    """Un vendedor de la Red en su puesto de trabajo. NO tiene rutina
+    de movimiento: se queda parado en el punto de su base, esperando
+    que Walter le traiga mercadería (E de cerca abre la entrega).
+    El Flaco administra el Parque del Norte Y el Baldío del Mercado,
+    pero físicamente solo se lo ve en el Baldío (su zona asignada)."""
+
+    COLOR_CAMPERA = (38, 62, 58)   # verde petróleo, perfil bajo
+
+    def __init__(self, x, y, vendedor):
+        super().__init__(x, y, self.COLOR_CAMPERA)
+        self.paleta = paleta_encapuchado(self.COLOR_CAMPERA)
+        self.vendedor = vendedor   # el Vendedor (economy) que encarna
+        self.estado = "trabajando"
+
+    def actualizar(self, dt):
+        pass   # estático: sin rutina entre zonas ni deambulo
+
+    def puede_recibir(self, rect_jugador):
+        """True si Walter está lo bastante cerca para entregarle."""
+        return (pygame.Vector2(self.rect.center)
+                .distance_to(rect_jugador.center) < DISTANCIA_COMPRA * 2)
+
+    def dibujar(self, superficie, camara):
+        dibujar_personaje(superficie, camara.aplicar(self.rect),
+                          self.paleta, self)
+
+
+class ContactoFlash(_Peaton):
+    """El contacto de una oferta flash: espera parado en el punto
+    con el cargamento hasta que Walter llegue (E para comprar) o se
+    le acabe la paciencia (el timer lo maneja el GestorEventos)."""
+
+    COLOR_CAMPERA = (96, 74, 40)   # marrón portuario
+
+    def __init__(self, x, y):
+        super().__init__(x, y, self.COLOR_CAMPERA)
+        self.paleta = paleta_encapuchado(self.COLOR_CAMPERA)
+        self.estado = "esperando"
+
+    def actualizar(self, dt):
+        pass   # clavado al lado de su cargamento
+
+    def puede_vender(self, rect_jugador):
+        return (pygame.Vector2(self.rect.center)
+                .distance_to(rect_jugador.center) < DISTANCIA_COMPRA * 2)
+
+    def dibujar(self, superficie, camara):
+        dibujar_personaje(superficie, camara.aplicar(self.rect),
+                          self.paleta, self)
+
+
 class CompradorIlegal(_Peaton):
     """El comprador de un trato acordado por celular. Entra caminando
     al lugar de encuentro, espera ahí parado, y si Walter se le acerca

@@ -17,7 +17,7 @@
 #
 # Estados: menu · nombre · partidas · opciones · jugando ·
 #   pausa · tienda · celular · inventario · habilidades ·
-#   dialogo · banco · cocina
+#   dialogo · banco · vendedor · cocina · estante
 #
 # Ejecutar desde esta carpeta:  python main.py
 # =========================================================
@@ -39,6 +39,7 @@ from src.settings import (
 from src.map import (
     Mapa, PUNTO_PUERTA, PUNTO_ENTREGA, POSICIONES_FILA,
     LUGARES_COMER, ENTRADAS_CLIENTES,
+    PUNTO_SOTANO, PUNTO_TRAMPILLA, Y_SUBSUELO,
 )
 from src.player import Jugador
 from src.camera import Camara
@@ -48,24 +49,33 @@ from src.economy import (
     PUNTOS_POR_RIVAL, PUNTOS_POR_ESCAPE, UMBRAL_DESBLOQUEO_MEDS,
     PRECIO_CURACION, CURA_SANGUCHE, LUGARES_VENTA,
     MAX_TRATOS_ACTIVOS, MAX_OFERTAS, VENTAS_PARA_CONTACTO,
+    SEGUNDOS_RECONQUISTA,
 )
-from src.npcs import ClienteLocal, CompradorIlegal, Proveedor
+from src.npcs import (
+    ClienteLocal, CompradorIlegal, Proveedor, VendedorZona,
+    ContactoFlash,
+)
+from src.events import GestorEventos, PROB_EMBOSCADA, EMBOSCADORES
 from src.dialogue import CajaDialogo
 from src.audio import Audio
 from src.tiempo import RelojJuego
 from src import savegame
 from src.enemies import (
-    Busqueda, Proyectil,
+    Busqueda, Proyectil, RivalGastronomico,
     crear_inspectores, crear_matones,
 )
 from src.skills import Habilidades
 from src.ui import (
-    HUD, TextoFlotante, HOTBAR,
+    HUD, TextoFlotante, MAX_HOTBAR,
     MenuPrincipal, PantallaOpciones, MenuPausa,
     PantallaTienda, PantallaCelular, PantallaInventario,
-    PantallaHabilidades, PantallaBanco,
+    PantallaHabilidades, PantallaBanco, PantallaVendedor,
     PantallaCocina, PantallaNombre, PantallaPartidas,
+    PantallaEstante,
     SuperficieUI, FuenteUI, fijar_escala,
+)
+from src.crafting import (
+    Sotano, LISTA, SEGUNDOS_PLANTA, SEGUNDOS_LABORATORIO,
 )
 
 # Nombre legible de una zona de venta (zona_id = índice)
@@ -78,7 +88,6 @@ RADIO_INTERACCION = TILE * 2
 ALCANCE_RUIDO_DISPARO = 340
 # Distancia a la que los NPCs entran en pánico por la violencia
 ALCANCE_PANICO = 300
-RESPAWN_RIVAL = 60
 DURACION_AVISO = 2.6
 SEGUNDOS_RETIRADA = 8.0   # con búsqueda en 0, los inspectores se van
 SEGUNDOS_AUTOSAVE = 60.0  # guardado automático durante la partida
@@ -123,7 +132,9 @@ class Juego:
         self.arbol = PantallaHabilidades()
         self.dialogo = CajaDialogo()
         self.banco_ui = PantallaBanco()
+        self.vendedor_ui = PantallaVendedor()
         self.cocina_ui = PantallaCocina()
+        self.estante_ui = PantallaEstante()
         self.nombre_ui = PantallaNombre()
         self.partidas_ui = PantallaPartidas()
         self.hud = HUD()
@@ -147,9 +158,14 @@ class Juego:
         """Crea (o recrea) el mundo desde cero."""
         self.mapa = Mapa()
         self.jugador = Jugador(*POSICION_INICIAL)
-        self.camara = Camara(self.mapa.ancho_px, self.mapa.alto_px)
+        # La cámara conoce la frontera ciudad/subsuelo: cada zona
+        # tiene sus propios límites (el sótano es una instancia
+        # aislada — desde ahí jamás se ve la ciudad, ni al revés)
+        self.camara = Camara(self.mapa.ancho_px, self.mapa.alto_px,
+                             Y_SUBSUELO)
         self.economia = Economia()
         self.produccion = Produccion()
+        self.sotano = Sotano()   # crafteo: maceta, laboratorio, estante
         self.habilidades = Habilidades()
         self.reloj_juego = RelojJuego()
         self.textos = []
@@ -175,8 +191,15 @@ class Juego:
         self.misiones_cumplidas = 0
         self.timer_oferta = 45.0       # próxima visita con trabajo
 
-        # La Red: conquista de zonas + vendedores propios
+        # La Red: conquista de zonas + vendedores propios. Cada
+        # vendedor colocado existe como NPC parado en su base
         self.red = RedVentas()
+        self.vendedores_npc = []
+
+        # Eventos de jefe (VIP / flash / sobornos): arrancan cuando
+        # El Flaco te saca del menudeo
+        self.gestor = GestorEventos()
+        self.contacto_flash = None   # el NPC de la oferta flash activa
 
         # Ley y competencia: SIN inspectores hasta que haya denuncias.
         # Los matones aparecen recién cuando El Flaco te cuenta cómo
@@ -376,7 +399,7 @@ class Juego:
         elif self.estado == "celular":
             accion = self.celular.manejar_evento(
                 evento, self.economia, self.tratos, self.reloj_juego,
-                self.red)
+                self.red, self.gestor)
             if accion == "cerrar":
                 self.estado = "jugando"
             elif isinstance(accion, tuple):
@@ -388,6 +411,8 @@ class Juego:
                 elif accion[0] == "rechazar":
                     self.tratos.remove(accion[1])
                     self.celular.seleccion = 0
+                elif accion[0] == "pagar_soborno":
+                    self._pagar_soborno()
 
         elif self.estado == "inventario":
             accion = self.inventario_ui.manejar_evento(
@@ -415,6 +440,16 @@ class Juego:
             if self.banco_ui.manejar_evento(evento, self.economia) == "cerrar":
                 self.estado = "jugando"
 
+        elif self.estado == "vendedor":
+            if self.vendedor_ui.manejar_evento(
+                    evento, self.economia, self.red) == "cerrar":
+                self.estado = "jugando"
+
+        elif self.estado == "estante":
+            if self.estante_ui.manejar_evento(
+                    evento, self.economia, self.sotano) == "cerrar":
+                self.estado = "jugando"
+
         elif self.estado == "cocina":
             accion = self.cocina_ui.manejar_evento(evento, self.economia)
             if accion == "cerrar":
@@ -424,10 +459,12 @@ class Juego:
                     self.estado = "jugando"
 
     def _usar_hotbar(self, indice):
-        """Teclas 1-8: usar el módulo del inventario rápido."""
-        if indice >= len(HOTBAR):
+        """Teclas 1-9: usar el stack de esa posición de la hotbar
+        dinámica (los stacks corren de lugar al vaciarse)."""
+        stacks = self.economia.inventario.stacks
+        if indice >= min(len(stacks), MAX_HOTBAR):
             return
-        id_item = HOTBAR[indice]
+        id_item = stacks[indice][0]
         if id_item == "arma":
             mensaje = self._alternar_arma()
             if mensaje:
@@ -659,14 +696,16 @@ class Juego:
             return
         ahora = self.reloj_juego.minuto_total
 
-        # Ofertas nuevas cada tanto (si hay lugar)
+        # Ofertas minoristas: SOLO mientras seas vendedor de calle.
+        # Con El Flaco desbloqueado sos jefe — el menudeo lo hacen
+        # tus vendedores y a vos te llegan eventos (GestorEventos)
         self.timer_oferta_trato -= dt
         if self.timer_oferta_trato <= 0:
             self.timer_oferta_trato = random.uniform(*INTERVALO_OFERTA)
             ofertas = sum(1 for t in self.tratos if t.estado == "oferta")
-            if (ofertas < MAX_OFERTAS
+            if (not self.red.flaco_desbloqueado
+                    and ofertas < MAX_OFERTAS
                     and len(self._tratos_aceptados()) < MAX_TRATOS_ACTIVOS):
-                # Solo proponen encuentros en zonas que ya manejás
                 self.tratos.append(Trato(self.reloj_juego,
                                          self.red.lugares_para_tratos()))
                 self.audio.reproducir("pedido")
@@ -701,6 +740,78 @@ class Juego:
             comprador.actualizar(dt)
         self.compradores = [c for c in self.compradores if not c.terminado]
 
+    # -----------------------------------------------------
+    # Eventos de jefe (VIP / flash / sobornos)
+    # -----------------------------------------------------
+    def _actualizar_eventos(self, dt):
+        """El GestorEventos decide qué pasa; acá se le pone mundo:
+        NPCs, avisos y sonido."""
+        avisos = self.gestor.actualizar(dt, self.economia, self.red,
+                                        self.reloj_juego, self.tratos)
+        for tipo_ev, evento in avisos:
+            if tipo_ev == "vip":
+                self.audio.reproducir("pedido")
+                self._texto_sobre_jugador(
+                    "Un pesado te escribió al celular (C)", COLOR_PUNTO)
+            elif tipo_ev == "flash":
+                self.audio.reproducir("pedido")
+                self.contacto_flash = ContactoFlash(*evento.punto())
+                self.aviso = ("OFERTA FLASH",
+                              f"{evento.cantidad} {NOMBRE_MED[evento.tipo]}"
+                              f" a ${evento.precio_total} en "
+                              f"{evento.nombre_zona} — ¡corré! "
+                              f"({int(evento.timer)}s)")
+                self.aviso_timer = 3.5
+            elif tipo_ev == "flash_vencido":
+                self.contacto_flash = None
+                self._texto_sobre_jugador(
+                    "El cargamento flash se esfumó…", COLOR_ERROR)
+            elif tipo_ev == "soborno":
+                self.audio.reproducir("sirena")
+                self.aviso = ("LA POLICÍA QUIERE SU PARTE",
+                              f"${evento.monto} en {int(evento.timer)}s"
+                              " o clausuran la Red — pagá desde"
+                              " Mensajes (C)")
+                self.aviso_timer = 4.0
+            elif tipo_ev == "castigo":
+                self.audio.reproducir("caida")
+                self.aviso = ("OPERATIVO POLICIAL",
+                              "No pagaste: tus vendedores se esconden"
+                              " y perdieron TODO su stock")
+                self.aviso_timer = 4.0
+
+    def _pagar_soborno(self):
+        """Paga la tajada policial desde la app Mensajes."""
+        evento = self.gestor.soborno_activo()
+        if evento is None:
+            return
+        if self.gestor.pagar_soborno(self.economia):
+            self.celular.mensaje = "Pagado. Nadie vio nada."
+            self.celular.color_mensaje = COLOR_DINERO
+            self.celular.seleccion = 0
+        else:
+            self.celular.mensaje = (f"Te faltan ${evento.monto} en"
+                                    " efectivo (el banco no cuenta).")
+            self.celular.color_mensaje = COLOR_ERROR
+
+    def _comprar_cargamento_flash(self):
+        """Walter llegó al punto de la oferta flash (E)."""
+        evento = self.gestor.flash_activo()
+        if evento is None:
+            self.contacto_flash = None
+            return
+        comprado = self.gestor.comprar_flash(self.economia)
+        if comprado is None:
+            self._texto_sobre_jugador(
+                f"Te faltan ${evento.precio_total} en efectivo",
+                COLOR_ERROR)
+            return
+        self.contacto_flash = None
+        self.audio.reproducir("venta")
+        self._texto_sobre_jugador(
+            f"+{comprado.cantidad} {NOMBRE_MED[comprado.tipo]} por "
+            f"${comprado.precio_total} — un regalo", COLOR_DINERO)
+
     def _comprador_para_entregar(self):
         """El comprador de un trato listo para cerrar, si Walter está
         al lado."""
@@ -714,6 +825,13 @@ class Juego:
     def _entregar_trato(self, comprador):
         """Cierra el trato: entrega la mercadería y cobra."""
         trato = comprador.trato
+        # Los pesados no aceptan entregas parciales: todo o nada
+        if (trato.vip
+                and self.economia.stock_med(trato.tipo) < trato.cantidad):
+            self._texto_sobre_jugador(
+                f"El pesado quiere los {trato.cantidad} "
+                f"{NOMBRE_MED[trato.tipo]} JUNTOS", COLOR_ERROR)
+            return
         vendidas, cobrado = self.economia.vender_trato(
             trato.tipo, trato.cantidad, trato.precio_unit)
         if vendidas == 0:
@@ -733,6 +851,33 @@ class Juego:
         # Vender sigue siendo ilegal: los vecinos denuncian
         self._reportar_infraccion("venta_ilegal", 1, 15.0,
                                   comprador.rect.center)
+        # Con los pesados a veces la cita era una trampa: apenas
+        # cobrás te saltan encima (matones sueltos, sin zona)
+        if trato.vip and random.random() < PROB_EMBOSCADA:
+            self.audio.reproducir("sirena")
+            self.aviso = ("¡EMBOSCADA!",
+                          "El pedido era una trampa — ¡cuidate!")
+            self.aviso_timer = 3.0
+            cx, cy = comprador.rect.center
+            for i in range(EMBOSCADORES):
+                lado = -1 if i % 2 == 0 else 1
+                self.rivales.append(RivalGastronomico(
+                    cx + lado * TILE * 4, cy - TILE * 2,
+                    radio_hogar=TILE * 8))
+        # Las ventas en el Parque del Norte construyen confianza:
+        # con suficientes, El Flaco te pasa su contacto
+        if trato.lugar_idx == 0:
+            if self.red.registrar_venta_parque() == "flaco":
+                self.audio.reproducir("pedido")
+                self.aviso = ("CONTACTO NUEVO: EL FLACO",
+                              "El barrio confía en vos. Mirá la app Red (C) —"
+                              " ojo: ahora hay matones cuidando las zonas")
+                self.aviso_timer = 4.0
+                self._sincronizar_matones()
+            elif not self.red.flaco_desbloqueado:
+                self._texto_sobre_jugador(
+                    f"Confianza del Parque: {self.red.ventas_parque}"
+                    f"/{VENTAS_PARA_CONTACTO}", COLOR_PUNTO)
         # Progreso de misiones de venta
         if self.mision is not None:
             if self.mision["tipo"] == "reparto":
@@ -754,6 +899,15 @@ class Juego:
         if comprador is not None:
             self._entregar_trato(comprador)
             return
+        npc_vendedor = self._vendedor_npc_cerca()
+        if npc_vendedor is not None:
+            self.vendedor_ui.abrir(npc_vendedor.vendedor)
+            self.estado = "vendedor"
+            return
+        if (self.contacto_flash is not None
+                and self.contacto_flash.puede_vender(self.jugador.rect)):
+            self._comprar_cargamento_flash()
+            return
         if self._cerca_de(self.mapa.tiles_tienda):
             self.tienda.abrir()
             self.estado = "tienda"
@@ -769,15 +923,33 @@ class Juego:
             self.celular.abrir()
             self.estado = "celular"
             return
+        # La trampilla y la escalera: transición FÍSICA local ↔
+        # sótano (teletransporte de coordenadas, misma escena)
+        if self._cerca_de(self.mapa.tiles_sotano):
+            self._teletransportar(PUNTO_SOTANO, "Bajaste al sótano")
+            return
+        if self._cerca_de(self.mapa.tiles_subida):
+            self._teletransportar(PUNTO_TRAMPILLA, "Subiste al local")
+            return
+        # Estaciones físicas del sótano (E dentro del rango)
+        if self._cerca_de(self.mapa.tiles_maceta):
+            self._usar_maceta()
+            return
+        if self._cerca_de(self.mapa.tiles_mesa):
+            self._usar_mesa()
+            return
+        if self._cerca_de(self.mapa.tiles_laboratorio):
+            self._usar_laboratorio()
+            return
+        if self._cerca_de(self.mapa.tiles_estante):
+            self.estante_ui.abrir()
+            self.estado = "estante"
+            return
         caja = self._caja_cerca()
         if caja is not None:
             self.economia.recibir_pedido(caja.contenido)
             self.cajas.remove(caja)
             self._texto_sobre_jugador(f"Recibiste: {caja.nombre}", COLOR_DINERO)
-            return
-        franquicia = self._franquicia_cerca()
-        if franquicia is not None and not franquicia.comprada:
-            self._comprar_franquicia(franquicia)
             return
         if self._cliente_para_atender() is not None:
             self._atender_cliente()
@@ -795,8 +967,72 @@ class Juego:
                     COLOR_ERROR)
 
     def _cerca_de(self, rects):
+        """El "trigger" de proximidad de todo lo interactuable: True
+        si el jugador está a menos de RADIO_INTERACCION del objeto."""
         alcance = self.jugador.rect.inflate(RADIO_INTERACCION, RADIO_INTERACCION)
         return any(alcance.colliderect(r) for r in rects)
+
+    # -----------------------------------------------------
+    # El sótano físico: teletransporte y estaciones
+    # -----------------------------------------------------
+    def _teletransportar(self, punto, aviso=None):
+        """Mueve al jugador a otra coordenada del MISMO mapa (el
+        sótano es un cuarto real tallado bajo la ciudad). La cámara
+        salta con él, así que se siente como cambiar de escena."""
+        self.jugador.pos.update(punto)
+        self.jugador.rect.topleft = (round(punto[0]), round(punto[1]))
+        self.camara.actualizar(self.jugador.rect)
+        self.audio.reproducir("click")
+        if aviso:
+            self._texto_sobre_jugador(aviso, COLOR_ORO)
+
+    def _usar_maceta(self):
+        """E frente a la maceta: cosechar si está lista, plantar si
+        está vacía."""
+        inventario = self.economia.inventario
+        if self.sotano.cosechar_maceta(inventario):
+            self._texto_sobre_jugador("+1 planta cosechada", COLOR_DINERO)
+        elif self.sotano.maceta is not None:
+            self._texto_sobre_jugador(
+                f"Creciendo… faltan {int(self.sotano.maceta) + 1}s",
+                COLOR_ORO)
+        elif self.sotano.plantar(inventario):
+            self.audio.reproducir("cocinado")
+            self._texto_sobre_jugador("Semilla plantada", COLOR_DINERO)
+        else:
+            self._texto_sobre_jugador(
+                "No tenés semillas (se piden por el celular)", COLOR_ERROR)
+
+    def _usar_mesa(self):
+        """E frente a la mesa de armado. La mesa evalúa sus recetas
+        contra el inventario y arma la primera cubierta:
+        planta + ziploc → natural · compuesto + ziploc → químico."""
+        producto = self.sotano.armar_en_mesa(self.economia.inventario)
+        if producto is not None:
+            self.audio.reproducir("cocinado")
+            self._texto_sobre_jugador(
+                f"+1 medicamento {'natural' if producto == 'med_nat' else 'químico'}"
+                " embolsado", COLOR_DINERO)
+        else:
+            self._texto_sobre_jugador(
+                "La mesa pide: planta + ziploc, o compuesto + ziploc",
+                COLOR_ERROR)
+
+    def _usar_laboratorio(self):
+        """E frente al laboratorio: cosechar o arrancar una cocinada."""
+        inventario = self.economia.inventario
+        if self.sotano.cosechar_laboratorio(inventario):
+            self._texto_sobre_jugador("+1 medicamento químico", COLOR_DINERO)
+        elif self.sotano.laboratorio is not None:
+            self._texto_sobre_jugador(
+                f"Cocinando… faltan {int(self.sotano.laboratorio) + 1}s",
+                COLOR_ORO)
+        elif self.sotano.iniciar_laboratorio(inventario):
+            self.audio.reproducir("cocinado")
+            self._texto_sobre_jugador("Compuesto al fuego", COLOR_DINERO)
+        else:
+            self._texto_sobre_jugador(
+                "No tenés compuestos (se piden por el celular)", COLOR_ERROR)
 
     def _caja_cerca(self):
         alcance = self.jugador.rect.inflate(RADIO_INTERACCION, RADIO_INTERACCION)
@@ -811,15 +1047,13 @@ class Juego:
                 and self.jugador.rect.inflate(RADIO_INTERACCION, RADIO_INTERACCION)
                 .colliderect(self.proveedor.rect))
 
-    def _franquicia_cerca(self):
-        alcance = self.jugador.rect.inflate(RADIO_INTERACCION, RADIO_INTERACCION)
-        for franquicia in self.franquicias:
-            if alcance.colliderect(franquicia.rect):
-                return franquicia
+    def _vendedor_npc_cerca(self):
+        """El NPC de un vendedor al alcance de Walter (para abrirle
+        la entrega de mercadería con E)."""
+        for npc in self.vendedores_npc:
+            if npc.puede_recibir(self.jugador.rect):
+                return npc
         return None
-
-    def _rival_de_zona_vivo(self, id_zona):
-        return any(r.zona_id == id_zona for r in self.rivales)
 
     def _curarse_en_clinica(self):
         if self.jugador.vida >= self.jugador.vida_max:
@@ -830,26 +1064,6 @@ class Juego:
                 f"Curación completa (-${PRECIO_CURACION})", COLOR_DINERO)
         else:
             self._texto_sobre_jugador("No te alcanza la plata", COLOR_ERROR)
-
-    def _comprar_franquicia(self, franquicia):
-        """Solo se puede comprar con el rival de la zona eliminado
-        (y antes de que llegue su reemplazo)."""
-        if self._rival_de_zona_vivo(franquicia.id_zona):
-            self._texto_sobre_jugador(
-                "La zona sigue tomada — sacá de circulación al rival",
-                COLOR_ERROR)
-            return
-        if not self.economia.pagar(franquicia.precio):
-            self._texto_sobre_jugador("No te alcanza la plata", COLOR_ERROR)
-            return
-        franquicia.comprada = True
-        self.economia.franquicias += 1
-        # Zona conquistada: el reemplazo del rival no viene más
-        self.respawns = [r for r in self.respawns
-                         if r.get("zona") != franquicia.id_zona]
-        self._texto_sobre_jugador(
-            f"¡{franquicia.nombre} es tuyo! +${INGRESO_FRANQUICIA} "
-            f"cada {int(INTERVALO_FRANQUICIA)}s", COLOR_ORO)
 
     def _cliente_para_atender(self):
         if not self.fila or not self._cerca_de(self.mapa.tiles_mostrador):
@@ -1051,20 +1265,70 @@ class Juego:
         self._panico_alrededor(rival.rect.center)
         self.textos.append(TextoFlotante(
             rival.rect.centerx, rival.rect.top - 8,
-            f"Rival eliminado: +${botin}, +{PUNTOS_POR_RIVAL} pts", COLOR_ORO))
+            f"Matón eliminado: +${botin}, +{PUNTOS_POR_RIVAL} pts", COLOR_ORO))
         # Progreso de misiones de limpieza
         if (self.mision is not None and self.mision["tipo"] == "limpieza"
                 and rival.zona_id == self.mision["zona"]):
             self._avanzar_mision()
-        # Si la zona ya es tuya (franquicia comprada), no viene reemplazo
-        zona_tuya = any(f.comprada and f.id_zona == rival.zona_id
-                        for f in self.franquicias)
-        if not zona_tuya:
-            self.respawns.append({
-                "timer": RESPAWN_RIVAL, "zona": rival.zona_id,
-                "dato": (rival.hogar.x, rival.hogar.y, rival.radio_hogar,
-                         rival.zona_id),
-            })
+        # Progreso de la conquista (no respawnean… salvo que dejes
+        # la zona sin proteger y la reconquisten)
+        if rival.zona_id is None:
+            return
+        vivos = sum(1 for r in self.rivales
+                    if r is not rival and not r.muerto
+                    and r.zona_id == rival.zona_id)
+        if vivos:
+            # La zona se limpia recién cuando cae el ÚLTIMO matón
+            self._texto_sobre_jugador(
+                f"Quedan {vivos} matones en {nombre_zona(rival.zona_id)}",
+                COLOR_ORO)
+            return
+        gracia = int(SEGUNDOS_RECONQUISTA)
+        nuevas = self.red.eliminar_guardia(rival.zona_id)
+        if nuevas is None:
+            # Limpiada, pero el paso (grupo) sigue en disputa: el
+            # reloj de reconquista de esta zona ya corre igual
+            self.aviso = ("ZONA LIMPIADA",
+                          f"{nombre_zona(rival.zona_id)} libre por "
+                          f"{gracia}s — ¡completá el grupo rápido!")
+            self.aviso_timer = 3.2
+            return
+        self.audio.reproducir("cocinado")
+        self.aviso = ("ZONA CONQUISTADA" if len(nuevas) == 1
+                      else "ZONAS CONQUISTADAS",
+                      " + ".join(nuevas) + f" — tenés {gracia}s para"
+                      " colocar a tu gente o la reconquistan")
+        self.aviso_timer = 3.5
+        # El paso siguiente ya tiene a sus matones custodiando
+        self._sincronizar_matones()
+
+    def _sincronizar_matones(self):
+        """Pone en el mundo a los matones del paso en disputa que
+        falten. Se llama al desbloquear a El Flaco, al conquistar un
+        paso completo y al cargar una partida."""
+        presentes = {r.zona_id for r in self.rivales}
+        faltan = [z for z in self.red.zonas_en_disputa()
+                  if z not in presentes]
+        if faltan:
+            self.rivales.extend(crear_matones(faltan))
+
+    def _sincronizar_vendedores_npc(self):
+        """Cada vendedor colocado aparece como NPC estático en el
+        centro de su base (El Flaco, aunque administra el Parque y
+        el Baldío, solo se lo ve en el Baldío). Sin rutinas: se
+        queda en su punto de aparición. Durante un operativo
+        policial (soborno impago) se esconden todos."""
+        if self.red.clausura > 0:
+            self.vendedores_npc = []
+            return
+        presentes = {n.vendedor for n in self.vendedores_npc}
+        for vendedor in self.red.vendedores:
+            if not vendedor.colocado or vendedor in presentes:
+                continue
+            col, fila, ancho, alto = LUGARES_VENTA[vendedor.zona_idx][1]
+            x = (col + ancho / 2) * TILE
+            y = (fila + alto / 2) * TILE
+            self.vendedores_npc.append(VendedorZona(x, y, vendedor))
 
     def _matar_inspector(self, inspector):
         self.busqueda.maximo()
@@ -1178,6 +1442,15 @@ class Juego:
 
         self._actualizar_mision(dt)
         self._actualizar_tratos(dt)
+        self._actualizar_eventos(dt)
+
+        # El sótano trabaja solo (maceta y laboratorio)
+        for evento_sotano in self.sotano.actualizar(dt):
+            self.audio.reproducir("cocinado")
+            self._texto_sobre_jugador(
+                "¡La planta de la maceta está lista!"
+                if evento_sotano == "planta_lista"
+                else "¡El químico del laboratorio está listo!", COLOR_ORO)
 
         # Guardado automático
         self.timer_autosave -= dt
@@ -1185,15 +1458,36 @@ class Juego:
             self.timer_autosave = SEGUNDOS_AUTOSAVE
             self._guardar_partida("Guardado automático")
 
-        # Ingreso pasivo de las franquicias
-        self.timer_franquicia -= dt
-        if self.timer_franquicia <= 0:
-            self.timer_franquicia = INTERVALO_FRANQUICIA
-            if self.economia.franquicias:
-                ganancia = self.economia.franquicias * INGRESO_FRANQUICIA
-                self.economia.dinero += ganancia
+        # La Red: tus vendedores venden solos y presentan contactos
+        self._sincronizar_vendedores_npc()
+        for tipo_ev, vendedor, ganancia in self.red.actualizar(
+                dt, self.economia):
+            if tipo_ev == "venta":
                 self._texto_sobre_jugador(
-                    f"+${ganancia} de tus franquicias", COLOR_DINERO)
+                    f"+${ganancia} — {vendedor.nombre} vendió en "
+                    f"{vendedor.nombre_zona}", COLOR_DINERO)
+            elif tipo_ev == "contacto":
+                self.audio.reproducir("pedido")
+                self.aviso = ("CONTACTO NUEVO",
+                              f"Te presentaron a {vendedor.nombre} — "
+                              f"maneja {vendedor.nombre_zona} (app Red)")
+                self.aviso_timer = 3.5
+            elif tipo_ev == "perdida":
+                # No la protegiste a tiempo: los matones volvieron
+                self.audio.reproducir("error")
+                self.aviso = ("TERRITORIO PERDIDO",
+                              f"Los matones recuperaron "
+                              f"{vendedor.nombre_zona} — vas a tener"
+                              " que limpiarla de nuevo")
+                self.aviso_timer = 3.5
+                self._sincronizar_matones()
+            elif tipo_ev == "reapertura":
+                # Pasó el operativo: los vendedores vuelven (el
+                # sync por frame los repone), pero sin stock
+                self.aviso = ("LA CALLE SE ENFRIÓ",
+                              "Tus vendedores volvieron — llevales"
+                              " mercadería, quedaron en cero")
+                self.aviso_timer = 3.5
 
         # ¿Estás cerrando un trato a la vista de la ley?
         vendiendo_ilegal = (self._comprador_para_entregar() is not None
@@ -1257,8 +1551,6 @@ class Juego:
         self.fila = [c for c in self.fila if not c.terminado]
         self.comensales = [c for c in self.comensales if not c.terminado]
         self.compradores = [c for c in self.compradores if not c.terminado]
-
-        self._actualizar_respawns(dt)
 
         # Búsqueda: decae más rápido con "Fantasma" (pero no mientras
         # la policía te está rastreando por un homicidio)
@@ -1327,18 +1619,6 @@ class Juego:
                 x + 10, PUNTO_ENTREGA[1] - 12, "¡Llegó tu pedido!", COLOR_ORO))
         self.pedidos = pendientes
 
-    def _actualizar_respawns(self, dt):
-        """Los rivales eliminados vuelven con gente nueva."""
-        pendientes = []
-        for respawn in self.respawns:
-            respawn["timer"] -= dt
-            if respawn["timer"] > 0:
-                pendientes.append(respawn)
-            else:
-                x, y, radio, zona = respawn["dato"]
-                self.rivales.append(RivalGastronomico(x, y, radio, zona))
-        self.respawns = pendientes
-
     def _texto_sobre_jugador(self, texto, color):
         self.textos.append(TextoFlotante(
             self.jugador.rect.centerx, self.jugador.rect.top - 14, texto, color))
@@ -1351,14 +1631,16 @@ class Juego:
             trato = comprador.trato
             return (f"E — Entregar {trato.cantidad} {NOMBRE_MED[trato.tipo]} "
                     f"(${trato.total})")
-        franquicia = self._franquicia_cerca()
-        if franquicia is not None:
-            if franquicia.comprada:
-                return f"{franquicia.nombre}: tuyo (+${INGRESO_FRANQUICIA}/{int(INTERVALO_FRANQUICIA)}s)"
-            if self._rival_de_zona_vivo(franquicia.id_zona):
-                return (f"{franquicia.nombre} (${franquicia.precio}) — "
-                        "la zona sigue tomada por un rival")
-            return f"E — Comprar {franquicia.nombre} (${franquicia.precio})"
+        npc_vendedor = self._vendedor_npc_cerca()
+        if npc_vendedor is not None:
+            return (f"E — Hablar con {npc_vendedor.vendedor.nombre} "
+                    "(entregarle mercadería)")
+        if (self.contacto_flash is not None
+                and self.contacto_flash.puede_vender(self.jugador.rect)):
+            evento = self.gestor.flash_activo()
+            if evento is not None:
+                return (f"E — Comprar {evento.cantidad} "
+                        f"{NOMBRE_MED[evento.tipo]} (${evento.precio_total})")
         if self._cerca_de(self.mapa.tiles_tienda):
             return "E — Almacén (armas y curas)"
         if self._cerca_de(self.mapa.tiles_banco):
@@ -1369,6 +1651,39 @@ class Juego:
             return "La clínica del barrio (estás sano)"
         if self._cerca_de(self.mapa.tiles_telefono):
             return "E — Usar el celular del local"
+        if self._cerca_de(self.mapa.tiles_sotano):
+            pendiente = (self.sotano.maceta is not None
+                         or self.sotano.laboratorio is not None)
+            return ("E — Bajar al sótano" + (" (hay trabajo en marcha)"
+                                             if pendiente else ""))
+        if self._cerca_de(self.mapa.tiles_subida):
+            return "E — Subir al local"
+        if self._cerca_de(self.mapa.tiles_maceta):
+            if self.sotano.maceta == LISTA:
+                return "E — Cosechar la planta"
+            if self.sotano.maceta is not None:
+                return f"La planta crece… {int(self.sotano.maceta) + 1}s"
+            return f"E — Plantar una semilla (tenés {self.economia.semillas})"
+        if self._cerca_de(self.mapa.tiles_mesa):
+            proximo = self.sotano.proxima_receta(self.economia.inventario)
+            stock = (f"(P:{self.economia.planta} "
+                     f"C:{self.economia.compuestos} "
+                     f"Z:{self.economia.ziploc})")
+            if proximo == "med_nat":
+                return f"E — Armar med NATURAL: planta + ziploc {stock}"
+            if proximo == "med_quim":
+                return f"E — Armar med QUÍMICO: compuesto + ziploc {stock}"
+            return ("Mesa de armado — pide planta + ziploc o "
+                    f"compuesto + ziploc {stock}")
+        if self._cerca_de(self.mapa.tiles_laboratorio):
+            if self.sotano.laboratorio == LISTA:
+                return "E — Retirar el medicamento químico"
+            if self.sotano.laboratorio is not None:
+                return f"Cocinando… {int(self.sotano.laboratorio) + 1}s"
+            return ("E — Cocinar un compuesto "
+                    f"(tenés {self.economia.compuestos})")
+        if self._cerca_de(self.mapa.tiles_estante):
+            return "E — Revisar el estante"
         caja = self._caja_cerca()
         if caja is not None:
             return f"E — Levantar caja: {caja.nombre}"
@@ -1413,7 +1728,7 @@ class Juego:
                 self.celular.dibujar(
                     self.sup_ui, self.economia, self.tratos,
                     self.reloj_juego, self.mapa, self.jugador,
-                    self.franquicias)
+                    self.red, self.gestor)
             elif self.estado == "inventario":
                 self.inventario_ui.dibujar(self.sup_ui, self.economia,
                                            self.jugador)
@@ -1423,6 +1738,11 @@ class Juego:
                 self.dialogo.dibujar(self.sup_ui)
             elif self.estado == "banco":
                 self.banco_ui.dibujar(self.sup_ui, self.economia)
+            elif self.estado == "vendedor":
+                self.vendedor_ui.dibujar(self.sup_ui, self.economia)
+            elif self.estado == "estante":
+                self.estante_ui.dibujar(self.sup_ui, self.economia,
+                                        self.sotano)
             elif self.estado == "cocina":
                 self.cocina_ui.dibujar(self.sup_ui, self.economia)
 
@@ -1431,8 +1751,6 @@ class Juego:
         self.mapa.dibujar(self.pantalla, self.camara)
         self._dibujar_encuentros()
         self._dibujar_conos()
-        for franquicia in self.franquicias:
-            franquicia.dibujar(self.pantalla, self.camara)
         for caja in self.cajas:
             caja.dibujar(self.pantalla, self.camara)
         for cliente in self.fila + self.comensales:
@@ -1445,6 +1763,15 @@ class Juego:
             comprador.dibujar(self.pantalla, self.camara)
             if comprador.estado == "esperando":
                 self._signo(comprador, "$", COLOR_PUNTO)
+        for npc in self.vendedores_npc:
+            npc.dibujar(self.pantalla, self.camara)
+            # Sin mercadería no vende: pide ayuda desde lejos
+            if npc.vendedor.stock_total == 0:
+                self._signo(npc, "!", COLOR_ORO)
+        if self.contacto_flash is not None:
+            self.contacto_flash.dibujar(self.pantalla, self.camara)
+            self._signo(self.contacto_flash, "$", COLOR_ORO)
+        self._dibujar_estaciones_sotano()
         for enemigo in self.inspectores + self.rivales:
             enemigo.dibujar(self.pantalla, self.camara)
         arma = self._cargar_gun() if self.economia.arma_equipada else None
@@ -1460,7 +1787,8 @@ class Juego:
             self.reloj_juego, self._proximo_trato(),
             self._pista_interaccion(), self.busqueda, self.pedidos,
             round(self.reloj.get_fps()), self.mostrar_panel, self.mision,
-            sin_leer=sum(1 for t in self.tratos if t.estado == "oferta"))
+            sin_leer=(sum(1 for t in self.tratos if t.estado == "oferta")
+                      + len(self.gestor.eventos)))
         if self.aviso:
             # El cartelón tapa lo que haya: bajar el texto encolado
             self.sup_ui.aplanar()
@@ -1469,6 +1797,48 @@ class Juego:
             etiqueta = self.fuente_mundo.render(
                 "DEBUG · atravesás paredes", True, COLOR_ERROR)
             self.sup_ui.blit(etiqueta, (8, ALTO_VENTANA - 24))
+
+    def _dibujar_estaciones_sotano(self):
+        """El estado vivo de los props del sótano: la planta crece
+        sobre la maceta y las estaciones avisan cuando terminan."""
+        visible = self.pantalla.get_rect()
+
+        def _sobre(tiles, timer, total):
+            r = self.camara.aplicar(tiles[0])
+            if not r.colliderect(visible):
+                return
+            if timer == LISTA:
+                # Parpadeo: hay algo para cosechar
+                if (pygame.time.get_ticks() // 350) % 2 == 0:
+                    img = self.fuente_mundo.render("¡LISTO!", True, COLOR_ORO)
+                    self.sup_ui.blit(img, (r.centerx - img.get_width() // 2,
+                                           r.y - 20))
+            elif timer is not None:
+                # Barrita de progreso sobre el prop
+                progreso = 1 - timer / total
+                pygame.draw.rect(self.pantalla, (20, 18, 24),
+                                 (r.x + 2, r.y - 8, r.width - 4, 5))
+                pygame.draw.rect(self.pantalla, COLOR_DINERO,
+                                 (r.x + 3, r.y - 7,
+                                  int((r.width - 6) * progreso), 3))
+
+        _sobre(self.mapa.tiles_maceta, self.sotano.maceta, SEGUNDOS_PLANTA)
+        _sobre(self.mapa.tiles_laboratorio, self.sotano.laboratorio,
+               SEGUNDOS_LABORATORIO)
+        # La planta se ve crecer en la maceta
+        r = self.camara.aplicar(self.mapa.tiles_maceta[0])
+        if r.colliderect(visible) and self.sotano.maceta is not None:
+            if self.sotano.maceta == LISTA:
+                alto = 12
+            else:
+                alto = max(2, int(12 * (1 - self.sotano.maceta
+                                        / SEGUNDOS_PLANTA)))
+            pygame.draw.line(self.pantalla, (90, 170, 90),
+                             (r.centerx, r.y + 12),
+                             (r.centerx, r.y + 12 - alto), 2)
+            if alto > 5:
+                pygame.draw.circle(self.pantalla, (110, 200, 110),
+                                   (r.centerx, r.y + 12 - alto), 3)
 
     def _dibujar_encuentros(self):
         """Marca violeta sobre la zona del/los tratos en curso."""

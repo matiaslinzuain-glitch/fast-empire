@@ -19,6 +19,7 @@ import random
 import pygame
 
 from .settings import TILE, COLOR_CAJA, COLOR_CAJA_CINTA
+from .inventory import Inventario
 
 # --- Balance económico (todo junto para ajustar fácil) ---
 DINERO_INICIAL = 200
@@ -48,19 +49,30 @@ RECETAS = {
 }
 
 # --- Pedidos por teléfono: (nombre, contenido, costo) ---
+# La mercadería NO se compra hecha: se compran INSUMOS y se
+# fabrica en el sótano del local (ver crafting.py).
 TIEMPO_ENTREGA = 25.0            # segundos hasta que llega la caja
 PEDIDOS = {
     "ing6":  ("Caja de ingredientes x6",    {"ingredientes": 6},  60),
     "ing12": ("Caja grande x12",            {"ingredientes": 12}, 110),
-    "nat3":  ("Medicamentos naturales x3",  {"med_nat": 3},       90),
-    "nat6":  ("Naturales x6 (mayorista)",   {"med_nat": 6},       160),
-    "quim3": ("Medicamentos químicos x3",   {"med_quim": 3},      150),
-    "quim6": ("Químicos x6 (mayorista)",    {"med_quim": 6},      270),
+    "ziploc10":  ("Bolsas ziploc x10",      {"ziploc": 10},       40),
+    "semillas4": ("Semillas x4",            {"semillas": 4},      70),
+    "comp4": ("Compuestos químicos x4",     {"compuestos": 4},    120),
 }
 
 # --- Venta ilegal: precio base por unidad en el punto ---
 VENTA_MED = {"med_nat": 55, "med_quim": 95}
 NOMBRE_MED = {"med_nat": "naturales", "med_quim": "químicos"}
+
+# Nombres legibles de todos los ítems del inventario dinámico
+NOMBRE_ITEM = {
+    "celular": "Celular",        "arma": "Pistola",
+    "balas": "Balas",            "ingredientes": "Ingredientes",
+    "sanguche": "Sanguches",     "med_nat": "Med. naturales",
+    "med_quim": "Med. químicos", "ziploc": "Bolsas ziploc",
+    "semillas": "Semillas",      "compuestos": "Compuestos",
+    "planta": "Plantas",
+}
 
 # --- Armas y curación (almacén del barrio) ---
 PRECIO_PISTOLA = 150
@@ -88,20 +100,44 @@ UMBRAL_AMENAZA_RIVALES = 150
 UMBRAL_DESBLOQUEO_MEDS = 200
 
 
+def _item_inventario(id_item):
+    """Propiedad respaldada por el inventario dinámico: leer devuelve
+    la cantidad del stack; asignar lo fija (0 borra el stack y libera
+    el lugar de la hotbar). Así `economia.med_nat -= 1` y todo el
+    código existente siguen andando sobre los stacks."""
+    def leer(self):
+        return self.inventario.cantidad(id_item)
+
+    def escribir(self, valor):
+        self.inventario.fijar(id_item, valor)
+    return property(leer, escribir)
+
+
 class Economia:
-    """Estado económico del jugador. Toda compra/venta pasa por acá."""
+    """Estado económico del jugador. Toda compra/venta pasa por acá.
+    Lo que Walter lleva encima vive en `inventario` (stacks dinámicos,
+    ver inventory.py); el resto (plata, banco, puntos) son campos."""
+
+    # Ítems apilables del inventario dinámico
+    ingredientes = _item_inventario("ingredientes")
+    med_nat = _item_inventario("med_nat")
+    med_quim = _item_inventario("med_quim")
+    balas = _item_inventario("balas")
+    sanguches = _item_inventario("sanguche")
+    ziploc = _item_inventario("ziploc")
+    semillas = _item_inventario("semillas")
+    compuestos = _item_inventario("compuestos")
+    planta = _item_inventario("planta")
 
     def __init__(self):
+        self.inventario = Inventario()
+        self.inventario.agregar("celular")   # tu primer "ítem"
         self.dinero = DINERO_INICIAL
         self.ingredientes = INGREDIENTES_INICIALES
-        self.producto = 0        # platos de comida listos
+        self.producto = 0        # platos de comida listos (del local)
         self.calidad = 0.0       # calidad promedio del stock (0 a 1)
-        self.med_nat = 0         # medicamentos naturales
-        self.med_quim = 0        # medicamentos químicos
         self.tiene_pistola = False
         self.arma_equipada = False  # con pistola: alternar pistola/puños
-        self.balas = 0
-        self.sanguches = 0       # curación de bolsillo (inventario)
         self.puntos = 0          # puntos de habilidad acumulados
         self.total_ilegal = 0    # facturación en negro: fama ante rivales
         self.total_comida = 0    # facturación del local: atrae al proveedor
@@ -135,10 +171,10 @@ class Economia:
         return True
 
     def recibir_pedido(self, contenido):
-        """Suma el contenido de una caja al inventario."""
-        self.ingredientes += contenido.get("ingredientes", 0)
-        self.med_nat += contenido.get("med_nat", 0)
-        self.med_quim += contenido.get("med_quim", 0)
+        """Suma el contenido de una caja al inventario dinámico
+        (cada ítem se apila o estrena su stack)."""
+        for id_item, cantidad in contenido.items():
+            self.inventario.agregar(id_item, cantidad)
 
     def agregar_producto(self, unidades, calidad):
         """Suma una tanda al stock. La calidad del stock es el promedio
@@ -273,14 +309,21 @@ class Caja:
 # --- La Red de venta: zonas, matones y vendedores ---
 # La ciudad se conquista EN ORDEN. La zona 1 (Parque del Norte) es
 # libre: vendé ahí VENTAS_PARA_CONTACTO veces y "El Flaco" te pasa
-# su contacto. Cada zona siguiente está custodiada por un matón:
-# hay que eliminar a TODOS los del paso para conquistarla(s). En
-# una zona conquistada podés COLOCAR a su vendedor, que vende solo
-# lo que le vayas depositando (menos su comisión). Y cada vendedor,
+# su contacto. Cada zona siguiente está custodiada por matones
+# (más cuanto más lejos: ver MATONES_POR_ZONA en enemies.py) y hay
+# que eliminar a TODOS los del paso para conquistarla(s). Una zona
+# limpiada queda VULNERABLE: si no colocás a su vendedor antes de
+# SEGUNDOS_RECONQUISTA, los matones la recuperan y se pelea de
+# nuevo; con el vendedor puesto queda asegurada para siempre. Cada
+# vendedor vende solo lo que le deposites (menos su comisión) y,
 # con ventas suficientes, te presenta al contacto siguiente.
 VENTAS_PARA_CONTACTO = 7      # ventas que destraban un contacto nuevo
 COMISION_VENDEDOR = 0.25      # lo que se queda cada vendedor
 INTERVALO_VENTA_RED = (45.0, 75.0)  # seg reales entre ventas de cada uno
+# Tiempo de gracia de una zona limpiada: si en estos segundos no
+# colocás a su vendedor, los matones la RECONQUISTAN y hay que
+# pelearla de cero. Colocar al vendedor la asegura para siempre.
+SEGUNDOS_RECONQUISTA = 75.0
 
 # Pasos de conquista (índices de LUGARES_VENTA; la zona 0 es libre).
 # Los grupos [5,6], [7,8] y [10,11,12] se desbloquean juntos
@@ -338,6 +381,16 @@ class RedVentas:
         self.ventas_parque = 0       # tus ventas en la zona 1
         self.paso = 0                # índice del paso en disputa
         self.guardias_muertas = set()  # zonas del paso ya limpiadas
+        # Estados de la reconquista:
+        # - vulnerables: zona limpiada → segundos que quedan para
+        #   protegerla colocando a su vendedor
+        # - perdidas: zonas ya ganadas que los matones recuperaron
+        #   (hay que limpiarlas otra vez)
+        self.vulnerables = {}
+        self.perdidas = set()
+        # Operativo policial (soborno impago): mientras corra, los
+        # vendedores se borran de la calle y no generan un peso
+        self.clausura = 0.0
         self.vendedores = [Vendedor(i + 1, NOMBRES_VENDEDORES[i])
                            for i in range(len(NOMBRES_VENDEDORES))]
 
@@ -346,14 +399,22 @@ class RedVentas:
         return self.vendedores[0].descubierto
 
     def zonas_conquistadas(self):
-        return [z for p in PASOS_CONQUISTA[:self.paso] for z in p]
+        """Zonas ganadas (aunque estén vulnerables), menos las que
+        los matones recuperaron."""
+        return [z for p in PASOS_CONQUISTA[:self.paso] for z in p
+                if z not in self.perdidas]
 
     def zonas_en_disputa(self):
-        """Zonas del paso actual que todavía tienen matón vivo."""
-        if not self.flaco_desbloqueado or self.paso >= len(PASOS_CONQUISTA):
+        """Zonas con matones: las del paso actual sin limpiar más
+        las que se perdieron por no protegerlas a tiempo."""
+        if not self.flaco_desbloqueado:
             return []
-        return [z for z in PASOS_CONQUISTA[self.paso]
-                if z not in self.guardias_muertas]
+        zonas = sorted(self.perdidas)
+        if self.paso < len(PASOS_CONQUISTA):
+            zonas += [z for z in PASOS_CONQUISTA[self.paso]
+                      if z not in self.guardias_muertas
+                      and z not in zonas]
+        return zonas
 
     def lugares_para_tratos(self):
         """Dónde pueden proponerte tratos: el Parque + lo conquistado."""
@@ -363,6 +424,10 @@ class RedVentas:
         """Una venta tuya en el Parque del Norte. Devuelve "flaco" en
         la venta que desbloquea el primer contacto."""
         if self.flaco_desbloqueado:
+            # El Flaco administra el Parque además del Baldío: tus
+            # ventas ahí suman a su historial (destraban contactos
+            # igual que las que hace él en persona)
+            self.vendedores[0].ventas += 1
             return None
         self.ventas_parque += 1
         if self.ventas_parque >= VENTAS_PARA_CONTACTO:
@@ -371,8 +436,17 @@ class RedVentas:
         return None
 
     def eliminar_guardia(self, zona_idx):
-        """Cayó un matón. Devuelve los nombres de las zonas nuevas si
-        con este se completó el paso; None si todavía faltan."""
+        """Cayó el ÚLTIMO matón de una zona: queda limpiada pero
+        VULNERABLE — arranca su tiempo de gracia para colocar al
+        vendedor antes de que los matones la recuperen.
+        Devuelve los nombres de las zonas que pasaron a ser tuyas
+        (el paso completo, o la zona recuperada); None si el paso
+        sigue en disputa."""
+        self.vulnerables[zona_idx] = SEGUNDOS_RECONQUISTA
+        if zona_idx in self.perdidas:
+            # Era una zona tuya que habían recuperado: vuelve a vos
+            self.perdidas.discard(zona_idx)
+            return [LUGARES_VENTA[zona_idx][0]]
         self.guardias_muertas.add(zona_idx)
         paso = PASOS_CONQUISTA[self.paso]
         if all(z in self.guardias_muertas for z in paso):
@@ -381,16 +455,45 @@ class RedVentas:
             return [LUGARES_VENTA[z][0] for z in paso]
         return None
 
+    def _perder_zona(self, zona_idx):
+        """Venció la gracia sin vendedor: los matones la recuperan
+        y hay que conquistarla desde cero."""
+        if (self.paso < len(PASOS_CONQUISTA)
+                and zona_idx in PASOS_CONQUISTA[self.paso]):
+            # El paso seguía en disputa: la zona vuelve a pelearse
+            self.guardias_muertas.discard(zona_idx)
+        else:
+            # Era parte de un paso ya completado: retrocede
+            self.perdidas.add(zona_idx)
+
     def vendedor_de(self, zona_idx):
         return self.vendedores[zona_idx - 1] if zona_idx >= 1 else None
 
     def colocar(self, vendedor):
-        """Lo manda a trabajar a su zona (si está conquistada)."""
+        """Lo manda a trabajar a su zona (si está conquistada).
+        Con el vendedor en su puesto la zona queda ASEGURADA:
+        se frena el reloj de reconquista para siempre."""
         if (not vendedor.descubierto or vendedor.colocado
                 or vendedor.zona_idx not in self.zonas_conquistadas()):
             return False
         vendedor.colocado = True
+        self.vulnerables.pop(vendedor.zona_idx, None)
         return True
+
+    def deshabilitar_vendedores(self, segundos):
+        """Castigo del soborno impago: los vendedores se esconden
+        (sin NPCs ni ventas) hasta que pase el operativo."""
+        self.clausura = max(self.clausura, segundos)
+
+    def limpiar_inventarios(self):
+        """La policía requisa TODO el stock de los vendedores.
+        Devuelve cuántas unidades se perdieron."""
+        requisado = 0
+        for vendedor in self.vendedores:
+            requisado += vendedor.stock_total
+            vendedor.stock_nat = 0
+            vendedor.stock_quim = 0
+        return requisado
 
     def depositar(self, vendedor, tipo, economia, cantidad=1):
         """Le dejás mercadería tuya para que la venda."""
@@ -405,9 +508,25 @@ class RedVentas:
         return True
 
     def actualizar(self, dt, economia):
-        """Ventas pasivas de los colocados + cadena de contactos.
-        Devuelve eventos [("venta", vendedor, $), ("contacto", v, 0)]."""
+        """Reloj de reconquista + ventas pasivas de los colocados +
+        cadena de contactos. Devuelve eventos [("venta", vendedor, $),
+        ("contacto", v, 0), ("perdida", v, 0)]."""
         eventos = []
+        # Zonas limpiadas sin proteger: se agota la gracia
+        for zona_idx in list(self.vulnerables):
+            self.vulnerables[zona_idx] -= dt
+            if self.vulnerables[zona_idx] > 0:
+                continue
+            del self.vulnerables[zona_idx]
+            self._perder_zona(zona_idx)
+            eventos.append(("perdida", self.vendedor_de(zona_idx), 0))
+        # Operativo policial: nadie vende hasta que se enfríe
+        if self.clausura > 0:
+            self.clausura -= dt
+            if self.clausura <= 0:
+                self.clausura = 0.0
+                eventos.append(("reapertura", None, 0))
+            return eventos
         for vendedor in self.vendedores:
             if not (vendedor.colocado and vendedor.stock_total > 0):
                 continue
@@ -441,6 +560,10 @@ class RedVentas:
     def a_dict(self):
         return {"ventas_parque": self.ventas_parque, "paso": self.paso,
                 "guardias_muertas": sorted(self.guardias_muertas),
+                "vulnerables": [[z, round(t, 1)]
+                                for z, t in sorted(self.vulnerables.items())],
+                "perdidas": sorted(self.perdidas),
+                "clausura": round(self.clausura, 1),
                 "vendedores": [v.a_dict() for v in self.vendedores]}
 
     @classmethod
@@ -451,6 +574,9 @@ class RedVentas:
         red.ventas_parque = datos.get("ventas_parque", 0)
         red.paso = datos.get("paso", 0)
         red.guardias_muertas = set(datos.get("guardias_muertas", []))
+        red.vulnerables = {z: t for z, t in datos.get("vulnerables", [])}
+        red.perdidas = set(datos.get("perdidas", []))
+        red.clausura = datos.get("clausura", 0.0)
         guardados = datos.get("vendedores", [])
         for i, v_datos in enumerate(guardados[:len(red.vendedores)]):
             red.vendedores[i] = Vendedor.desde_dict(v_datos)
@@ -510,6 +636,7 @@ class Trato:
         self.minuto_expira = reloj.en_minutos(
             random.randint(*MINUTOS_EXPIRA_OFERTA))
         self.estado = "oferta"
+        self.vip = False   # PedidoVIP (events.py) lo pisa
 
     @property
     def nombre_lugar(self):
@@ -558,7 +685,7 @@ class Trato:
                 "lugar": self.lugar_idx, "tipo": self.tipo,
                 "cantidad": self.cantidad, "precio": self.precio_unit,
                 "cita": self.minuto_cita, "expira": self.minuto_expira,
-                "estado": self.estado}
+                "estado": self.estado, "vip": self.vip}
 
     @classmethod
     def desde_dict(cls, datos, reloj):
