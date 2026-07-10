@@ -542,6 +542,11 @@ class Juego:
     def _presentar(self):
         """Compone el frame en la ventana real: el lienzo lógico
         estirado (pixel art) + el texto de la UI a resolución nativa."""
+        # macOS nuevos: paneles semitransparentes dejan alfa 0 en el
+        # lienzo; al llegar a la ventana, el texto sobre esas zonas se
+        # copia crudo (bloques). Alfa opaco antes de componer.
+        self.pantalla.fill((0, 0, 0, 255),
+                           special_flags=pygame.BLEND_RGBA_MAX)
         if self._lienzo_grande is None:
             self.ventana.blit(self.pantalla, (0, 0))
         else:

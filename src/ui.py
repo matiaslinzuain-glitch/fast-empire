@@ -230,6 +230,10 @@ class SuperficieUI:
     def aplanar(self):
         """Baja el texto encolado al lienzo (al tamaño lógico), para
         que lo que se dibuje después lo tape como corresponde."""
+        # En macOS nuevos el lienzo tiene canal alfa real y los paneles
+        # semitransparentes dejan alfa 0: el blit del texto ahí copia
+        # crudo (bloques sólidos). Se fuerza alfa opaco antes del texto.
+        self.raw.fill((0, 0, 0, 255), special_flags=pygame.BLEND_RGBA_MAX)
         for texto, x, y in self.textos:
             texto.dibujar_logico(self.raw, x, y)
         self.textos.clear()
