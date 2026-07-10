@@ -21,7 +21,7 @@ from pathlib import Path
 from .settings import (
     ANCHO_VENTANA, ALTO_VENTANA, TILE,
     COLOR_FONDO, COLOR_TEXTO, COLOR_TEXTO_SUAVE,
-    COLOR_ORO, COLOR_DINERO, COLOR_ERROR,
+    COLOR_ORO, COLOR_DINERO, COLOR_TARJETA, COLOR_ERROR,
     COLOR_VIDA, COLOR_VIDA_FONDO,
     COLOR_MED_NAT, COLOR_MED_QUIM, COLOR_PUNTO,
     COLOR_CELULAR, COLOR_CELULAR_BORDE, COLOR_PANTALLA_CEL,
@@ -91,6 +91,158 @@ def _panel(ancho, alto, alpha=175):
 
 
 # ---------------------------------------------------------
+# Texto nítido: el mundo se dibuja en el lienzo lógico de
+# 960x540 y se estira a la ventana, pero el TEXTO se renderiza
+# aparte a la resolución real del monitor (así en pantalla
+# completa queda fino en vez de pixelado).
+# - FuenteUI reemplaza a pygame.font.Font en la interfaz:
+#   render() devuelve un TextoUI que MIDE en píxeles lógicos
+#   (el layout de siempre no se entera) pero guarda la imagen
+#   renderizada al tamaño nativo.
+# - SuperficieUI envuelve el lienzo: las formas y paneles van
+#   a .raw como siempre; los TextoUI quedan en una cola y
+#   volcar() los dibuja nítidos sobre la ventana real, después
+#   de estirar el lienzo.
+# - aplanar() es la barrera para los menús que se dibujan
+#   ENCIMA del juego: baja al lienzo el texto ya encolado para
+#   que el velo del menú lo tape como corresponde.
+# ---------------------------------------------------------
+_ESCALA = 1.0      # ventana real / resolución lógica (1.0 en ventana)
+_FUENTES = {}      # tamaño en px -> Font (lógicas y nativas comparten)
+
+
+def fijar_escala(escala):
+    """La llama main.py al crear la ventana o alternar fullscreen."""
+    global _ESCALA
+    _ESCALA = escala
+
+
+def _fuente_px(px):
+    fuente = _FUENTES.get(px)
+    if fuente is None:
+        fuente = pygame.font.Font(None, px)
+        _FUENTES[px] = fuente
+    return fuente
+
+
+class TextoUI:
+    """Texto renderizado al tamaño nativo que "mide" en píxeles
+    lógicos, para que el layout de los menús no cambie."""
+
+    def __init__(self, tam, texto, antialias, color):
+        self.tam = tam
+        self.texto = texto
+        self.antialias = antialias
+        self.color = color
+        self.alpha = None
+        self.nativa = _fuente_px(max(1, round(tam * _ESCALA))).render(
+            texto, antialias, color)
+        if _ESCALA == 1.0:
+            self._wl, self._hl = self.nativa.get_size()
+        else:
+            self._wl, self._hl = _fuente_px(tam).size(texto)
+
+    def get_width(self):
+        return self._wl
+
+    def get_height(self):
+        return self._hl
+
+    def get_size(self):
+        return (self._wl, self._hl)
+
+    def get_rect(self, **kwargs):
+        rect = pygame.Rect(0, 0, self._wl, self._hl)
+        for clave, valor in kwargs.items():
+            setattr(rect, clave, valor)
+        return rect
+
+    def set_alpha(self, alpha):
+        self.alpha = alpha
+
+    def dibujar_logico(self, destino, x, y):
+        """Versión al tamaño lógico, para aplanar sobre el lienzo."""
+        if _ESCALA == 1.0:
+            img = self.nativa
+        else:
+            img = _fuente_px(self.tam).render(
+                self.texto, self.antialias, self.color)
+        if self.alpha is not None:
+            img.set_alpha(self.alpha)
+        destino.blit(img, (round(x), round(y)))
+
+    def dibujar_nativo(self, destino, x, y, escala, dx, dy):
+        if self.alpha is not None:
+            self.nativa.set_alpha(self.alpha)
+        destino.blit(self.nativa,
+                     (dx + round(x * escala), dy + round(y * escala)))
+
+
+class FuenteUI:
+    """Cara compatible con pygame.font.Font para la interfaz."""
+
+    def __init__(self, tam):
+        self.tam = tam
+
+    def render(self, texto, antialias=True, color=(255, 255, 255)):
+        return TextoUI(self.tam, texto, antialias, color)
+
+    def size(self, texto):
+        return _fuente_px(self.tam).size(texto)
+
+    def get_height(self):
+        return _fuente_px(self.tam).get_height()
+
+
+class SuperficieUI:
+    """Envuelve el lienzo lógico. Las formas se dibujan en .raw;
+    los textos (TextoUI) se encolan y se vuelcan nítidos al final
+    del frame sobre la ventana real."""
+
+    def __init__(self, lienzo):
+        self.raw = lienzo
+        self.textos = []   # (TextoUI, x lógico, y lógico)
+
+    def blit(self, img, pos):
+        if isinstance(img, TextoUI):
+            if isinstance(pos, pygame.Rect):
+                x, y = pos.x, pos.y
+            else:
+                x, y = pos[0], pos[1]
+            self.textos.append((img, x, y))
+        else:
+            self.raw.blit(img, pos)
+
+    def fill(self, color):
+        self.raw.fill(color)
+
+    def get_width(self):
+        return self.raw.get_width()
+
+    def get_height(self):
+        return self.raw.get_height()
+
+    def get_size(self):
+        return self.raw.get_size()
+
+    def get_rect(self):
+        return self.raw.get_rect()
+
+    def aplanar(self):
+        """Baja el texto encolado al lienzo (al tamaño lógico), para
+        que lo que se dibuje después lo tape como corresponde."""
+        for texto, x, y in self.textos:
+            texto.dibujar_logico(self.raw, x, y)
+        self.textos.clear()
+
+    def volcar(self, destino, escala, dx=0, dy=0):
+        """Dibuja el texto encolado sobre la ventana real, nítido."""
+        for texto, x, y in self.textos:
+            texto.dibujar_nativo(destino, x, y, escala, dx, dy)
+        self.textos.clear()
+
+
+# ---------------------------------------------------------
 # Textos flotantes (viven en coordenadas de mundo)
 # ---------------------------------------------------------
 class TextoFlotante:
@@ -127,71 +279,72 @@ def dibujar_icono(superficie, id_item, rect, economia=None):
     if id_item == "arma":
         color = COLOR_TEXTO if (economia and economia.tiene_pistola) \
             else (70, 70, 76)
-        pygame.draw.rect(superficie, color, (cx - 9, cy - 4, 16, 5))   # caño
-        pygame.draw.rect(superficie, color, (cx - 7, cy - 1, 5, 9))    # culata
+        pygame.draw.rect(superficie.raw, color, (cx - 9, cy - 4, 16, 5))   # caño
+        pygame.draw.rect(superficie.raw, color, (cx - 7, cy - 1, 5, 9))    # culata
     elif id_item == "punos":
-        pygame.draw.rect(superficie, (196, 164, 120), (cx - 8, cy - 4, 7, 8))
-        pygame.draw.rect(superficie, (196, 164, 120), (cx + 1, cy - 4, 7, 8))
+        pygame.draw.rect(superficie.raw, (196, 164, 120), (cx - 8, cy - 4, 7, 8))
+        pygame.draw.rect(superficie.raw, (196, 164, 120), (cx + 1, cy - 4, 7, 8))
     elif id_item == "balas":
         for i in range(3):
             x = cx - 9 + i * 7
-            pygame.draw.rect(superficie, COLOR_ORO, (x, cy - 5, 4, 8))
-            pygame.draw.rect(superficie, (150, 110, 40), (x, cy + 3, 4, 3))
+            pygame.draw.rect(superficie.raw, COLOR_ORO, (x, cy - 5, 4, 8))
+            pygame.draw.rect(superficie.raw, (150, 110, 40), (x, cy + 3, 4, 3))
     elif id_item == "comida":
-        pygame.draw.circle(superficie, (235, 235, 230), (cx, cy), 9)   # plato
-        pygame.draw.circle(superficie, (214, 128, 52), (cx, cy), 5)    # guiso
+        pygame.draw.circle(superficie.raw, (235, 235, 230), (cx, cy), 9)   # plato
+        pygame.draw.circle(superficie.raw, (214, 128, 52), (cx, cy), 5)    # guiso
     elif id_item == "ingredientes":
-        pygame.draw.rect(superficie, (150, 110, 66), (cx - 8, cy - 5, 16, 12))
-        pygame.draw.rect(superficie, (196, 172, 120), (cx - 1, cy - 5, 3, 12))
+        pygame.draw.rect(superficie.raw, (150, 110, 66), (cx - 8, cy - 5, 16, 12))
+        pygame.draw.rect(superficie.raw, (196, 172, 120), (cx - 1, cy - 5, 3, 12))
     elif id_item == "sanguche":
-        pygame.draw.rect(superficie, (222, 186, 120), (cx - 9, cy - 5, 18, 4))
-        pygame.draw.rect(superficie, (120, 180, 90), (cx - 8, cy - 1, 16, 2))
-        pygame.draw.rect(superficie, (190, 90, 70), (cx - 8, cy + 1, 16, 2))
-        pygame.draw.rect(superficie, (222, 186, 120), (cx - 9, cy + 3, 18, 4))
+        pygame.draw.rect(superficie.raw, (222, 186, 120), (cx - 9, cy - 5, 18, 4))
+        pygame.draw.rect(superficie.raw, (120, 180, 90), (cx - 8, cy - 1, 16, 2))
+        pygame.draw.rect(superficie.raw, (190, 90, 70), (cx - 8, cy + 1, 16, 2))
+        pygame.draw.rect(superficie.raw, (222, 186, 120), (cx - 9, cy + 3, 18, 4))
     elif id_item == "med_nat":
-        pygame.draw.rect(superficie, COLOR_MED_NAT, (cx - 7, cy - 4, 14, 9))
-        pygame.draw.rect(superficie, (80, 130, 80), (cx - 7, cy - 4, 14, 3))
+        pygame.draw.rect(superficie.raw, COLOR_MED_NAT, (cx - 7, cy - 4, 14, 9))
+        pygame.draw.rect(superficie.raw, (80, 130, 80), (cx - 7, cy - 4, 14, 3))
     elif id_item == "med_quim":
-        pygame.draw.rect(superficie, COLOR_MED_QUIM, (cx - 4, cy - 8, 8, 16))
-        pygame.draw.rect(superficie, (120, 80, 160), (cx - 4, cy - 8, 8, 6))
+        pygame.draw.rect(superficie.raw, COLOR_MED_QUIM, (cx - 4, cy - 8, 8, 16))
+        pygame.draw.rect(superficie.raw, (120, 80, 160), (cx - 4, cy - 8, 8, 6))
     elif id_item == "efectivo":
-        pygame.draw.rect(superficie, COLOR_DINERO, (cx - 10, cy - 6, 20, 12))
-        pygame.draw.circle(superficie, (60, 110, 60), (cx, cy), 4)
+        pygame.draw.rect(superficie.raw, COLOR_DINERO, (cx - 10, cy - 6, 20, 12))
+        pygame.draw.circle(superficie.raw, (60, 110, 60), (cx, cy), 4)
     elif id_item == "celular":
-        pygame.draw.rect(superficie, COLOR_CELULAR_BORDE, (cx - 6, cy - 9, 12, 18))
-        pygame.draw.rect(superficie, (120, 200, 160), (cx - 4, cy - 7, 8, 12))
+        pygame.draw.rect(superficie.raw, COLOR_CELULAR_BORDE, (cx - 6, cy - 9, 12, 18))
+        pygame.draw.rect(superficie.raw, (120, 200, 160), (cx - 4, cy - 7, 8, 12))
     elif id_item == "banco":
-        pygame.draw.rect(superficie, COLOR_BANCO, (cx - 9, cy - 6, 18, 13))
-        pygame.draw.rect(superficie, COLOR_ORO, (cx - 9, cy - 1, 18, 3))
+        pygame.draw.rect(superficie.raw, COLOR_BANCO, (cx - 9, cy - 6, 18, 13))
+        pygame.draw.rect(superficie.raw, COLOR_ORO, (cx - 9, cy - 1, 18, 3))
     elif id_item == "franquicias":
-        pygame.draw.rect(superficie, (104, 72, 48), (cx - 8, cy - 3, 16, 10))
-        pygame.draw.rect(superficie, COLOR_ORO, (cx - 10, cy - 7, 20, 5))
+        pygame.draw.rect(superficie.raw, (104, 72, 48), (cx - 8, cy - 3, 16, 10))
+        pygame.draw.rect(superficie.raw, COLOR_ORO, (cx - 10, cy - 7, 20, 5))
     elif id_item == "puntos":
-        pygame.draw.circle(superficie, COLOR_ORO, (cx, cy), 8)
-        pygame.draw.circle(superficie, (150, 115, 45), (cx, cy), 8, 2)
+        pygame.draw.circle(superficie.raw, COLOR_ORO, (cx, cy), 8)
+        pygame.draw.circle(superficie.raw, (150, 115, 45), (cx, cy), 8, 2)
     elif id_item == "receta":
-        pygame.draw.rect(superficie, (230, 224, 200), (cx - 7, cy - 9, 14, 18))
+        pygame.draw.rect(superficie.raw, (230, 224, 200), (cx - 7, cy - 9, 14, 18))
         for i in range(3):
-            pygame.draw.rect(superficie, (140, 130, 110),
+            pygame.draw.rect(superficie.raw, (140, 130, 110),
                              (cx - 4, cy - 5 + i * 5, 8, 2))
 
 
 # ---------------------------------------------------------
 # HUD del juego (Fase 11: repartido, con inventario rápido)
 # ---------------------------------------------------------
-# Los 9 módulos del inventario rápido, en orden (teclas 1-9)
+# Los 8 módulos del inventario rápido, en orden (teclas 1-8).
+# La plata no va acá: se muestra arriba a la izquierda con la vida.
 HOTBAR = ["arma", "balas", "comida", "ingredientes", "sanguche",
-          "med_nat", "med_quim", "efectivo", "celular"]
+          "med_nat", "med_quim", "celular"]
 _SLOT = 44          # tamaño de cada módulo en px
 _SLOT_SEP = 4
 
 
 class HUD:
     def __init__(self):
-        self.fuente = pygame.font.Font(None, 24)
-        self.fuente_chica = pygame.font.Font(None, 20)
-        self.fuente_reloj = pygame.font.Font(None, 30)
-        self.fuente_aviso = pygame.font.Font(None, 68)
+        self.fuente = FuenteUI(24)
+        self.fuente_chica = FuenteUI(20)
+        self.fuente_reloj = FuenteUI(30)
+        self.fuente_aviso = FuenteUI(68)
 
     def dibujar(self, superficie, jugador, economia, produccion,
                 reloj, trato_activo, pista, busqueda, pedidos, fps,
@@ -220,16 +373,28 @@ class HUD:
                               ALTO_VENTANA - img.get_height() - 6))
 
     def _vida_y_plata(self, superficie, jugador, economia, mostrar_panel):
-        superficie.blit(_panel(190, 46 if mostrar_panel else 24), (8, 8))
-        pygame.draw.rect(superficie, COLOR_VIDA_FONDO, (16, 14, 174, 10))
+        superficie.blit(_panel(190, 70 if mostrar_panel else 24), (8, 8))
+        pygame.draw.rect(superficie.raw, COLOR_VIDA_FONDO, (16, 14, 174, 10))
         relleno = int(174 * max(0, jugador.vida) / jugador.vida_max)
-        pygame.draw.rect(superficie, COLOR_VIDA, (16, 14, relleno, 10))
+        pygame.draw.rect(superficie.raw, COLOR_VIDA, (16, 14, relleno, 10))
         if mostrar_panel:
+            # Efectivo (billetes) y plata del banco (tarjeta)
+            icono = _obtener_icono("efectivo", 18)
+            if icono is not None:
+                superficie.blit(icono, (14, 28))
             img = self.fuente.render(f"$ {economia.dinero}", True, COLOR_DINERO)
-            superficie.blit(img, (16, 30))
+            superficie.blit(img, (38, 30))
+
+            icono = _obtener_icono("banco", 18)
+            if icono is not None:
+                superficie.blit(icono, (14, 50))
+            img = self.fuente.render(f"$ {economia.banco}", True,
+                                     COLOR_TARJETA)
+            superficie.blit(img, (38, 52))
+
             pts = self.fuente_chica.render(
                 f"{economia.puntos} pts [T]", True, COLOR_ORO)
-            superficie.blit(pts, (190 - pts.get_width(), 33))
+            superficie.blit(pts, (190 - pts.get_width(), 52))
 
     def _reloj(self, superficie, reloj):
         img = self.fuente_reloj.render(reloj.texto(), True, COLOR_TEXTO)
@@ -239,7 +404,7 @@ class HUD:
         superficie.blit(img, (x + 12, y_centrado(img, 8, 30)))
 
     def _hotbar(self, superficie, economia, sin_leer):
-        """Los 9 módulos del inventario rápido, abajo al centro."""
+        """Los 8 módulos del inventario rápido, abajo al centro."""
         cuentas = {
             "arma": None,
             "balas": economia.balas if economia.tiene_pistola else None,
@@ -248,7 +413,6 @@ class HUD:
             "sanguche": economia.sanguches,
             "med_nat": economia.med_nat,
             "med_quim": economia.med_quim,
-            "efectivo": economia.dinero,
             "celular": None,
         }
         total = len(HOTBAR) * _SLOT + (len(HOTBAR) - 1) * _SLOT_SEP
@@ -263,7 +427,7 @@ class HUD:
             equipada = id_item == "arma" and economia.arma_equipada \
                 and economia.tiene_pistola
             borde = COLOR_SLOT_SEL if equipada else COLOR_SLOT_BORDE
-            pygame.draw.rect(superficie, borde, rect, 2 if equipada else 1)
+            pygame.draw.rect(superficie.raw, borde, rect, 2 if equipada else 1)
 
             # Slot 1 muestra a QUÉ arma cambiarías al presionar 1
             icono = id_item
@@ -276,14 +440,12 @@ class HUD:
             superficie.blit(num, (rect.x + 3, rect.y + 1))
             cuenta = cuentas[id_item]
             if cuenta is not None:
-                texto = f"${cuenta}" if id_item == "efectivo" else str(cuenta)
-                color = COLOR_DINERO if id_item == "efectivo" else COLOR_TEXTO
-                img = self.fuente_chica.render(texto, True, color)
+                img = self.fuente_chica.render(str(cuenta), True, COLOR_TEXTO)
                 superficie.blit(img, (rect.right - img.get_width() - 3,
                                       rect.bottom - img.get_height() - 2))
             # Mensajes sin leer sobre el celular
             if id_item == "celular" and sin_leer:
-                pygame.draw.circle(superficie, COLOR_ERROR,
+                pygame.draw.circle(superficie.raw, COLOR_ERROR,
                                    (rect.right - 6, rect.y + 7), 7)
                 aviso = self.fuente_chica.render(str(sin_leer), True, COLOR_TEXTO)
                 superficie.blit(aviso, (rect.right - 6 - aviso.get_width() // 2,
@@ -295,7 +457,7 @@ class HUD:
         y = ALTO_VENTANA - _SLOT - 34
         superficie.blit(_panel(ancho, alto), (x, y))
         relleno = int((ancho - 4) * min(1.0, produccion.progreso))
-        pygame.draw.rect(superficie, COLOR_ORO, (x + 2, y + 2, relleno, alto - 4))
+        pygame.draw.rect(superficie.raw, COLOR_ORO, (x + 2, y + 2, relleno, alto - 4))
         img = self.fuente_chica.render("Cocinando…", True, COLOR_FONDO)
         superficie.blit(img, (x + 8, y + 1))
 
@@ -349,9 +511,9 @@ class HUD:
         for i in range(5):
             casilla = pygame.Rect(x + 8 + i * 18, 30, 14, 14)
             if i < busqueda.nivel:
-                pygame.draw.rect(superficie, COLOR_VIDA, casilla)
+                pygame.draw.rect(superficie.raw, COLOR_VIDA, casilla)
             else:
-                pygame.draw.rect(superficie, COLOR_VIDA_FONDO, casilla, 1)
+                pygame.draw.rect(superficie.raw, COLOR_VIDA_FONDO, casilla, 1)
 
     def _pista(self, superficie, pista):
         img = self.fuente.render(pista, True, COLOR_TEXTO)
@@ -385,7 +547,7 @@ class _MenuVertical:
     def __init__(self, opciones):
         self.opciones = opciones
         self.seleccion = 0
-        self.fuente = pygame.font.Font(None, 40)
+        self.fuente = FuenteUI(40)
         self._rects = []  # zonas clickeables, se regeneran al dibujar
 
     def _indice_en(self, pos):
@@ -440,8 +602,8 @@ class MenuPrincipal(_MenuVertical):
     def __init__(self):
         super().__init__(["Nueva partida", "Cargar partida (vacío)",
                           "Opciones", "Modo debug: no", "Salir"])
-        self.fuente_titulo = pygame.font.Font(None, 100)
-        self.fuente_sub = pygame.font.Font(None, 26)
+        self.fuente_titulo = FuenteUI(100)
+        self.fuente_sub = FuenteUI(26)
 
     def refrescar_debug(self, activo):
         self.opciones[3] = f"Modo debug: {'sí' if activo else 'no'}"
@@ -476,9 +638,9 @@ class PantallaNombre:
     LARGO_MAXIMO = 16
 
     def __init__(self):
-        self.fuente_titulo = pygame.font.Font(None, 64)
-        self.fuente = pygame.font.Font(None, 40)
-        self.fuente_chica = pygame.font.Font(None, 25)
+        self.fuente_titulo = FuenteUI(64)
+        self.fuente = FuenteUI(40)
+        self.fuente_chica = FuenteUI(25)
         self.texto = ""
         self.mensaje = ""
 
@@ -517,8 +679,8 @@ class PantallaNombre:
 
         # Caja de texto con cursor titilante
         caja = pygame.Rect(ANCHO_VENTANA // 2 - 170, 245, 340, 48)
-        pygame.draw.rect(superficie, (24, 24, 30), caja)
-        pygame.draw.rect(superficie, COLOR_ORO, caja, 2)
+        pygame.draw.rect(superficie.raw, (24, 24, 30), caja)
+        pygame.draw.rect(superficie.raw, COLOR_ORO, caja, 2)
         cursor = "|" if (pygame.time.get_ticks() // 450) % 2 == 0 else " "
         img = self.fuente.render(self.texto + cursor, True, COLOR_TEXTO)
         superficie.blit(img, (caja.x + 12, caja.y + 10))
@@ -548,9 +710,9 @@ class PantallaNombre:
 class PantallaPartidas(_MenuVertical):
     def __init__(self):
         super().__init__(["(no hay partidas guardadas)"])
-        self.fuente = pygame.font.Font(None, 34)
-        self.fuente_titulo = pygame.font.Font(None, 64)
-        self.fuente_chica = pygame.font.Font(None, 25)
+        self.fuente = FuenteUI(34)
+        self.fuente_titulo = FuenteUI(64)
+        self.fuente_chica = FuenteUI(25)
         self.entradas = []
         self.confirmar = None   # índice esperando segundo X
         self.mensaje = ""
@@ -627,16 +789,16 @@ class PantallaOpciones(_MenuVertical):
         "W A S D — moverse   ·   Mouse — apuntar   ·   Click izq. — atacar",
         "Click der. (sostener) — mira   ·   E — interactuar",
         "C — celular (pedidos, mapa, mensajes)   ·   O — inventario",
-        "1-9 — inventario rápido   ·   T — habilidades   ·   TAB — ocultar HUD",
+        "1-8 — inventario rápido   ·   T — habilidades   ·   TAB — ocultar HUD",
         "F11 o Cmd+F — pantalla completa   ·   F5 — guardar   ·   ESC — pausa",
     ]
 
     def __init__(self):
         super().__init__(["Sonido: 80%", "Música: sí",
                           "Pantalla completa: no", "Volver"])
-        self.fuente = pygame.font.Font(None, 38)
-        self.fuente_titulo = pygame.font.Font(None, 64)
-        self.fuente_chica = pygame.font.Font(None, 25)
+        self.fuente = FuenteUI(38)
+        self.fuente_titulo = FuenteUI(64)
+        self.fuente_chica = FuenteUI(25)
 
     def refrescar(self, audio, pantalla_completa):
         """Actualiza las etiquetas con el estado real."""
@@ -676,8 +838,8 @@ class MenuPausa(_MenuVertical):
     def __init__(self):
         super().__init__(["Continuar", "Guardar partida", "Pantalla completa",
                           "Modo debug: no", "Menú principal"])
-        self.fuente_titulo = pygame.font.Font(None, 72)
-        self.fuente_chica = pygame.font.Font(None, 24)
+        self.fuente_titulo = FuenteUI(72)
+        self.fuente_chica = FuenteUI(24)
         self.mensaje = ""
 
     def refrescar_debug(self, activo):
@@ -716,9 +878,9 @@ class PantallaTienda(_MenuVertical):
 
     def __init__(self):
         super().__init__([etiqueta for _, etiqueta in self.ITEMS])
-        self.fuente = pygame.font.Font(None, 34)
-        self.fuente_titulo = pygame.font.Font(None, 56)
-        self.fuente_chica = pygame.font.Font(None, 24)
+        self.fuente = FuenteUI(34)
+        self.fuente_titulo = FuenteUI(56)
+        self.fuente_chica = FuenteUI(24)
         self.mensaje = ""
         self.color_mensaje = COLOR_TEXTO
 
@@ -827,10 +989,10 @@ class PantallaCelular:
     ]
 
     def __init__(self):
-        self.fuente       = pygame.font.Font(None, 24)
-        self.fuente_chica = pygame.font.Font(None, 20)
-        self.fuente_titulo= pygame.font.Font(None, 30)
-        self.fuente_mini  = pygame.font.Font(None, 16)
+        self.fuente       = FuenteUI(24)
+        self.fuente_chica = FuenteUI(20)
+        self.fuente_titulo= FuenteUI(30)
+        self.fuente_mini  = FuenteUI(16)
         self.app = 0
         self.seleccion = 0
         self.en_home = True         # True = pantalla de inicio con íconos
@@ -995,9 +1157,9 @@ class PantallaCelular:
         x = (ANCHO_VENTANA - aw) // 2
         y = (ALTO_VENTANA - ah) // 2
 
-        pygame.draw.rect(superficie, COLOR_CELULAR,
+        pygame.draw.rect(superficie.raw, COLOR_CELULAR,
                          (x, y, aw, ah), border_radius=24)
-        pygame.draw.rect(superficie, COLOR_CELULAR_BORDE,
+        pygame.draw.rect(superficie.raw, COLOR_CELULAR_BORDE,
                          (x, y, aw, ah), 2, border_radius=24)
 
         if self.en_home:
@@ -1019,10 +1181,10 @@ class PantallaCelular:
     # ── Home screen (grilla 2×2 de apps) ──────────────────
     def _home_screen(self, sup, x, y, aw, ah, tratos, reloj):
         """Pantalla de inicio con íconos de las 4 apps."""
-        pygame.draw.rect(sup, (10, 10, 12),
+        pygame.draw.rect(sup.raw, (10, 10, 12),
                          (x + aw // 2 - 28, y + 10, 56, 13), border_radius=7)
         pant = pygame.Rect(x + 10, y + 32, aw - 20, ah - 52)
-        pygame.draw.rect(sup, COLOR_PANTALLA_CEL, pant, border_radius=8)
+        pygame.draw.rect(sup.raw, COLOR_PANTALLA_CEL, pant, border_radius=8)
         self._status_bar(sup, pant, reloj)
 
         lbl = self.fuente_chica.render("Fast Empire OS", True, COLOR_ORO)
@@ -1048,46 +1210,46 @@ class PantallaCelular:
             rect = pygame.Rect(rx, ry, TAM, TAM)
             self._rects_home.append(rect)
 
-            pygame.draw.rect(sup, color, rect, border_radius=14)
+            pygame.draw.rect(sup.raw, color, rect, border_radius=14)
             if i == self.seleccion:
-                pygame.draw.rect(sup, COLOR_ORO, rect, 2, border_radius=14)
+                pygame.draw.rect(sup.raw, COLOR_ORO, rect, 2, border_radius=14)
 
             cx, cy = rect.centerx, rect.centery
 
             if i == 0:  # Comidas: bowl con vapor
                 bowl = pygame.Rect(cx - 16, cy - 2, 32, 16)
-                pygame.draw.ellipse(sup, (255, 200, 80), bowl)
-                pygame.draw.ellipse(sup, (200, 140, 40), bowl, 2)
+                pygame.draw.ellipse(sup.raw, (255, 200, 80), bowl)
+                pygame.draw.ellipse(sup.raw, (200, 140, 40), bowl, 2)
                 for vx in (cx - 8, cx, cx + 8):
                     for dy in range(3):
-                        pygame.draw.circle(sup, (255, 255, 255),
+                        pygame.draw.circle(sup.raw, (255, 255, 255),
                                            (vx, cy - 8 - dy * 4), 1)
             elif i == 1:  # Ilegales: pastilla bicolor
                 left = pygame.Rect(cx - 18, cy - 9, 18, 18)
                 right = pygame.Rect(cx, cy - 9, 18, 18)
-                pygame.draw.ellipse(sup, (200, 60, 60), left)
-                pygame.draw.ellipse(sup, (200, 200, 200), right)
-                pygame.draw.ellipse(sup, (160, 160, 160),
+                pygame.draw.ellipse(sup.raw, (200, 60, 60), left)
+                pygame.draw.ellipse(sup.raw, (200, 200, 200), right)
+                pygame.draw.ellipse(sup.raw, (160, 160, 160),
                                     pygame.Rect(cx - 18, cy - 9, 36, 18), 2)
-                pygame.draw.line(sup, (120, 120, 120),
+                pygame.draw.line(sup.raw, (120, 120, 120),
                                  (cx, cy - 9), (cx, cy + 9), 2)
             elif i == 2:  # Mapa: pin de localización
-                pygame.draw.circle(sup, (200, 220, 255), (cx, cy - 10), 12)
-                pygame.draw.circle(sup, color, (cx, cy - 10), 5)
+                pygame.draw.circle(sup.raw, (200, 220, 255), (cx, cy - 10), 12)
+                pygame.draw.circle(sup.raw, color, (cx, cy - 10), 5)
                 pts = [(cx, cy + 18), (cx - 8, cy - 2), (cx + 8, cy - 2)]
-                pygame.draw.polygon(sup, (200, 220, 255), pts)
+                pygame.draw.polygon(sup.raw, (200, 220, 255), pts)
             elif i == 3:  # Mensajes: burbuja de chat
                 bub = pygame.Rect(cx - 18, cy - 14, 36, 24)
-                pygame.draw.rect(sup, (200, 240, 220), bub, border_radius=7)
+                pygame.draw.rect(sup.raw, (200, 240, 220), bub, border_radius=7)
                 pts = [(cx - 6, cy + 10), (cx - 16, cy + 20), (cx + 4, cy + 10)]
-                pygame.draw.polygon(sup, (200, 240, 220), pts)
+                pygame.draw.polygon(sup.raw, (200, 240, 220), pts)
                 for dy_off in (-8, -2, 4):
-                    pygame.draw.line(sup, (80, 160, 110),
+                    pygame.draw.line(sup.raw, (80, 160, 110),
                                      (cx - 12, cy + dy_off),
                                      (cx + 12, cy + dy_off), 1)
                 if ofertas > 0:
                     bpos = (rect.right - 9, rect.top + 9)
-                    pygame.draw.circle(sup, (220, 40, 40), bpos, 10)
+                    pygame.draw.circle(sup.raw, (220, 40, 40), bpos, 10)
                     badge = self.fuente_mini.render(str(ofertas), True, (255, 255, 255))
                     sup.blit(badge, (bpos[0] - badge.get_width() // 2,
                                     bpos[1] - badge.get_height() // 2))
@@ -1098,10 +1260,10 @@ class PantallaCelular:
     # ── Portrait (apps 0, 1, 3) ────────────────────────────
     def _frame_port(self, sup, x, y, aw, ah, economia, tratos, reloj):
         # Notch + pantalla
-        pygame.draw.rect(sup, (10, 10, 12),
+        pygame.draw.rect(sup.raw, (10, 10, 12),
                          (x + aw // 2 - 28, y + 10, 56, 13), border_radius=7)
         pant = pygame.Rect(x + 10, y + 32, aw - 20, ah - 92)
-        pygame.draw.rect(sup, COLOR_PANTALLA_CEL, pant, border_radius=8)
+        pygame.draw.rect(sup.raw, COLOR_PANTALLA_CEL, pant, border_radius=8)
         self._status_bar(sup, pant, reloj)
         cont = pygame.Rect(pant.x, pant.y + 24, pant.width, pant.height - 24)
         if self.app == 0:
@@ -1122,7 +1284,7 @@ class PantallaCelular:
             r = pygame.Rect(x + 10 + i * sw, y + ah - 52, sw - 4, 40)
             self._rects_apps.append(r)
             bg = COLOR_APP_ACTIVA if i == self.app else (40, 40, 48)
-            pygame.draw.rect(sup, bg, r, border_radius=8)
+            pygame.draw.rect(sup.raw, bg, r, border_radius=8)
             img = self.fuente_chica.render(
                 etq, True, COLOR_FONDO if i == self.app else COLOR_TEXTO)
             sup.blit(img, (r.centerx - img.get_width() // 2,
@@ -1134,23 +1296,23 @@ class PantallaCelular:
         sup.blit(hora, (pant.x + 8, pant.y + 5))
         for i in range(4):
             hb = 3 + i * 2
-            pygame.draw.rect(sup, COLOR_TEXTO_SUAVE,
+            pygame.draw.rect(sup.raw, COLOR_TEXTO_SUAVE,
                              (pant.right - 66 + i * 6,
                               pant.y + 14 - hb, 4, hb))
-        pygame.draw.rect(sup, COLOR_TEXTO_SUAVE,
+        pygame.draw.rect(sup.raw, COLOR_TEXTO_SUAVE,
                          (pant.right - 34, pant.y + 5, 22, 10), 1)
-        pygame.draw.rect(sup, COLOR_DINERO,
+        pygame.draw.rect(sup.raw, COLOR_DINERO,
                          (pant.right - 32, pant.y + 7, 14, 6))
 
     # ── Landscape (app Mapa) ───────────────────────────────
     def _frame_land(self, sup, x, y, aw, ah,
                     mapa, jugador, tratos, franquicias, reloj):
         # Notch en lado izquierdo
-        pygame.draw.rect(sup, (10, 10, 12),
+        pygame.draw.rect(sup.raw, (10, 10, 12),
                          (x + 10, y + ah // 2 - 20, 13, 40), border_radius=7)
         # Pantalla: margen izq=32, der=40, top=10, bot=12
         pant = pygame.Rect(x + 32, y + 10, aw - 72, ah - 22)
-        pygame.draw.rect(sup, COLOR_PANTALLA_CEL, pant, border_radius=8)
+        pygame.draw.rect(sup.raw, COLOR_PANTALLA_CEL, pant, border_radius=8)
         # Título dentro de la pantalla
         lbl = self.fuente_chica.render(
             f"{reloj.hora:02d}:{reloj.minuto:02d}  —  Mapa de la ciudad",
@@ -1168,7 +1330,7 @@ class PantallaCelular:
             r = pygame.Rect(x + aw - 38, y + 10 + i * sh, 30, sh - 4)
             self._rects_apps.append(r)
             bg = COLOR_APP_ACTIVA if i == self.app else (40, 40, 48)
-            pygame.draw.rect(sup, bg, r, border_radius=6)
+            pygame.draw.rect(sup.raw, bg, r, border_radius=6)
             img = self.fuente_chica.render(
                 lbl_a, True, COLOR_FONDO if i == self.app else COLOR_TEXTO)
             sup.blit(img, (r.centerx - img.get_width() // 2,
@@ -1197,10 +1359,10 @@ class PantallaCelular:
             r = pygame.Rect(zona.x + 6, y, zona.width - 12, 42)
             self._rects_items.append(r)
             elegido = i == self.seleccion
-            pygame.draw.rect(sup, (36, 38, 48) if elegido else (24, 26, 34),
+            pygame.draw.rect(sup.raw, (36, 38, 48) if elegido else (24, 26, 34),
                              r, border_radius=6)
             if elegido:
-                pygame.draw.rect(sup, COLOR_APP_ACTIVA, r, 1, border_radius=6)
+                pygame.draw.rect(sup.raw, COLOR_APP_ACTIVA, r, 1, border_radius=6)
             sup.blit(self.fuente_chica.render(nombre_p, True, COLOR_TEXTO),
                      (r.x + 8, r.y + 6))
             sup.blit(self.fuente_chica.render(f"${precio}", True, COLOR_DINERO),
@@ -1247,7 +1409,7 @@ class PantallaCelular:
         mx = zona.x + (zona_mm_w - mw) // 2
         my = zona.y + (zona.height - mh) // 2
         sup.blit(mm_s, (mx, my))
-        pygame.draw.rect(sup, COLOR_CELULAR_BORDE,
+        pygame.draw.rect(sup.raw, COLOR_CELULAR_BORDE,
                          (mx - 1, my - 1, mw + 2, mh + 2), 1)
 
         def pt(col_t, fil_t):          # tile → pantalla
@@ -1260,7 +1422,7 @@ class PantallaCelular:
 
         # Local principal (dorado)
         p_loc = pt(4, 4)
-        pygame.draw.circle(sup, COLOR_ORO, p_loc, 5)
+        pygame.draw.circle(sup.raw, COLOR_ORO, p_loc, 5)
         lbl_loc = self.fuente_mini.render("Local", True, COLOR_ORO)
         sup.blit(lbl_loc, (p_loc[0] + 6, p_loc[1] - 5))
 
@@ -1268,7 +1430,7 @@ class PantallaCelular:
         AMARILLO = (255, 220, 40)
         for idx, (_, (col, fil, aw, af)) in enumerate(LUGARES_VENTA):
             px = pt(col + aw // 2, fil + af // 2)
-            pygame.draw.circle(sup, AMARILLO, px, 4)
+            pygame.draw.circle(sup.raw, AMARILLO, px, 4)
             num = self.fuente_mini.render(str(idx + 1), True, (15, 15, 15))
             sup.blit(num, (px[0] - num.get_width() // 2,
                            px[1] - num.get_height() // 2))
@@ -1276,7 +1438,7 @@ class PantallaCelular:
         # Franquicias compradas
         for fr in franquicias:
             if fr.comprada:
-                pygame.draw.rect(sup, COLOR_ORO, (*pt_px(fr.rect.center), 3, 3))
+                pygame.draw.rect(sup.raw, COLOR_ORO, (*pt_px(fr.rect.center), 3, 3))
 
         # Tratos
         ticks = pygame.time.get_ticks()
@@ -1284,24 +1446,24 @@ class PantallaCelular:
             if trato.estado in ("aceptado", "encuentro"):
                 p = pt_px(trato.rect.center)
                 if trato.estado == "encuentro" and (ticks // 400) % 2 == 0:
-                    pygame.draw.circle(sup, COLOR_PUNTO, p, 5)
+                    pygame.draw.circle(sup.raw, COLOR_PUNTO, p, 5)
                 else:
-                    pygame.draw.circle(sup, COLOR_PUNTO, p, 4, 1)
+                    pygame.draw.circle(sup.raw, COLOR_PUNTO, p, 4, 1)
 
         # Walter (parpadea)
         if (ticks // 300) % 2 == 0:
-            pygame.draw.circle(sup, COLOR_TEXTO, pt_px(jugador.rect.center), 4)
+            pygame.draw.circle(sup.raw, COLOR_TEXTO, pt_px(jugador.rect.center), 4)
 
         # ── Leyenda ──
         lx = zona.x + zona_mm_w + 6
         ly = zona.y + 2
-        pygame.draw.rect(sup, (16, 16, 22),
+        pygame.draw.rect(sup.raw, (16, 16, 22),
                          (lx - 2, ly, ANCHO_LEY + 2, zona.height))
         for color, etq in [(COLOR_TEXTO,  "Vos"),
                            (COLOR_ORO,    "Local / franquicias"),
                            (AMARILLO,     "Zonas de venta"),
                            (COLOR_PUNTO,  "Tratos pendientes")]:
-            pygame.draw.circle(sup, color, (lx + 5, ly + 7), 4)
+            pygame.draw.circle(sup.raw, color, (lx + 5, ly + 7), 4)
             img = self.fuente_mini.render(etq, True, COLOR_TEXTO_SUAVE)
             sup.blit(img, (lx + 14, ly))
             ly += 16
@@ -1334,10 +1496,10 @@ class PantallaCelular:
             r = pygame.Rect(zona.x + 6, y, zona.width - 12, 74)
             self._rects_items.append(r)
             elegido = i == self.seleccion
-            pygame.draw.rect(sup, (36, 38, 48) if elegido else (24, 26, 34),
+            pygame.draw.rect(sup.raw, (36, 38, 48) if elegido else (24, 26, 34),
                              r, border_radius=8)
             if elegido:
-                pygame.draw.rect(sup, COLOR_APP_ACTIVA, r, 1, border_radius=8)
+                pygame.draw.rect(sup.raw, COLOR_APP_ACTIVA, r, 1, border_radius=8)
             sup.blit(self.fuente_chica.render(
                 trato.comprador_nombre, True, COLOR_PUNTO), (r.x + 8, r.y + 5))
             for j, linea in enumerate(
@@ -1391,9 +1553,9 @@ class PantallaBanco(_MenuVertical):
 
     def __init__(self):
         super().__init__([etiqueta for _, etiqueta in self.ITEMS])
-        self.fuente = pygame.font.Font(None, 34)
-        self.fuente_titulo = pygame.font.Font(None, 56)
-        self.fuente_chica = pygame.font.Font(None, 24)
+        self.fuente = FuenteUI(34)
+        self.fuente_titulo = FuenteUI(56)
+        self.fuente_chica = FuenteUI(24)
         self.mensaje = ""
         self.color_mensaje = COLOR_TEXTO
 
@@ -1466,9 +1628,9 @@ class PantallaCocina(_MenuVertical):
              f"+ ${especial['costo_extra']} de especias"),
             "Salir",
         ])
-        self.fuente = pygame.font.Font(None, 34)
-        self.fuente_titulo = pygame.font.Font(None, 56)
-        self.fuente_chica = pygame.font.Font(None, 24)
+        self.fuente = FuenteUI(34)
+        self.fuente_titulo = FuenteUI(56)
+        self.fuente_chica = FuenteUI(24)
         self.mensaje = ""
         self.color_mensaje = COLOR_TEXTO
 
@@ -1524,9 +1686,9 @@ class PantallaHabilidades:
     directamente con el mouse; E/Enter o click compran."""
 
     def __init__(self):
-        self.fuente_titulo = pygame.font.Font(None, 56)
-        self.fuente = pygame.font.Font(None, 26)
-        self.fuente_chica = pygame.font.Font(None, 21)
+        self.fuente_titulo = FuenteUI(56)
+        self.fuente = FuenteUI(26)
+        self.fuente_chica = FuenteUI(21)
         self.sel = [0, 0]          # [rama, nivel]
         self.mensaje = ""
         self.color_mensaje = COLOR_TEXTO
@@ -1603,7 +1765,7 @@ class PantallaHabilidades:
                 caja = pygame.Surface(rect.size, pygame.SRCALPHA)
                 caja.fill(fondo)
                 superficie.blit(caja, rect)
-                pygame.draw.rect(superficie, COLOR_ORO if elegida else borde,
+                pygame.draw.rect(superficie.raw, COLOR_ORO if elegida else borde,
                                  rect, 2 if elegida else 1)
 
                 color_nombre = datos["color"] if estado != "bloqueada" else (110, 110, 114)
@@ -1642,9 +1804,9 @@ class PantallaInventario:
     TAM = 64
 
     def __init__(self):
-        self.fuente_titulo = pygame.font.Font(None, 52)
-        self.fuente = pygame.font.Font(None, 26)
-        self.fuente_chica = pygame.font.Font(None, 21)
+        self.fuente_titulo = FuenteUI(52)
+        self.fuente = FuenteUI(26)
+        self.fuente_chica = FuenteUI(21)
         self.sel = 0
         self.mensaje = ""
         self._rects = []
@@ -1757,7 +1919,7 @@ class PantallaInventario:
             caja = pygame.Surface(rect.size, pygame.SRCALPHA)
             caja.fill((*COLOR_SLOT, 235))
             superficie.blit(caja, rect)
-            pygame.draw.rect(superficie,
+            pygame.draw.rect(superficie.raw,
                              COLOR_SLOT_SEL if elegido else COLOR_SLOT_BORDE,
                              rect, 2 if elegido else 1)
             icono = id_item

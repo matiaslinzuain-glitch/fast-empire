@@ -17,6 +17,7 @@ from .settings import (
     ANCHO_VENTANA, ALTO_VENTANA,
     COLOR_TEXTO, COLOR_TEXTO_SUAVE, COLOR_ORO, COLOR_PUNTO,
 )
+from .ui import FuenteUI
 
 VELOCIDAD_TIPEO = 45  # caracteres por segundo
 
@@ -90,9 +91,9 @@ DIALOGOS = {
 
 class CajaDialogo:
     def __init__(self):
-        self.fuente_nombre = pygame.font.Font(None, 28)
-        self.fuente = pygame.font.Font(None, 26)
-        self.fuente_chica = pygame.font.Font(None, 20)
+        self.fuente_nombre = FuenteUI(28)
+        self.fuente = FuenteUI(26)
+        self.fuente_chica = FuenteUI(20)
         self.id_actual = None
         self.lineas = []
         self.indice = 0
@@ -152,7 +153,7 @@ class CajaDialogo:
         panel.fill((10, 10, 14, 235))
         x, y = 20, ALTO_VENTANA - alto - 16
         superficie.blit(panel, (x, y))
-        pygame.draw.rect(superficie, (70, 70, 78),
+        pygame.draw.rect(superficie.raw, (70, 70, 78),
                          (x, y, ANCHO_VENTANA - 40, alto), 1)
 
         linea = self._linea
@@ -174,6 +175,6 @@ class CajaDialogo:
         superficie.blit(img, (x + ANCHO_VENTANA - 60 - img.get_width(),
                               y + alto - 24))
         if completa:
-            pygame.draw.polygon(superficie, COLOR_ORO, [
+            pygame.draw.polygon(superficie.raw, COLOR_ORO, [
                 (x + 20, y + alto - 22), (x + 32, y + alto - 22),
                 (x + 26, y + alto - 12)])

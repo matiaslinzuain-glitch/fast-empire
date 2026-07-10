@@ -102,7 +102,24 @@ class Audio:
         }
 
     def _generar_musica(self):
-        """Loop ambiente: bajos suaves en Am - F - C - G (16 s)."""
+        """Loop ambiente o carga de música personalizada."""
+        import os
+        ruta = os.path.join("assets", "music", "Neon Driftline.mp3")
+        if os.path.exists(ruta):
+            try:
+                pygame.mixer.music.load(ruta)
+                class _MusicaWrapper:
+                    def set_volume(self, vol):
+                        pygame.mixer.music.set_volume(vol)
+                    def play(self, loops=-1):
+                        pygame.mixer.music.play(loops=loops)
+                    def stop(self):
+                        pygame.mixer.music.stop()
+                self.musica = _MusicaWrapper()
+                return
+            except pygame.error as e:
+                print("Error al cargar mp3:", e)
+        
         progresion = [110.0, 87.31, 130.81, 98.0]  # A2, F2, C3, G2
         dur_acorde = 4.0
         muestras = []

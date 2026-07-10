@@ -66,6 +66,7 @@ from src.ui import (
     PantallaTienda, PantallaCelular, PantallaInventario,
     PantallaHabilidades, PantallaBanco,
     PantallaCocina, PantallaNombre, PantallaPartidas,
+    SuperficieUI, FuenteUI, fijar_escala,
 )
 
 # Nombres legibles de las zonas (para las misiones de limpieza)
@@ -91,21 +92,20 @@ INTERVALO_OFERTA = (45.0, 90.0)
 
 class Juego:
     def __init__(self):
-        # Nearest-neighbor scaling y DPI nativo: deben ir ANTES de pygame.init
-        os.environ["SDL_RENDER_SCALE_QUALITY"] = "0"
+        # DPI nativo en Windows: debe definirse ANTES de pygame.init
         os.environ["SDL_WINDOWS_DPI_AWARENESS"] = "permonitorv2"
         # El mixer se configura ANTES de pygame.init (16-bit mono)
         pygame.mixer.pre_init(22050, -16, 1, 512)
         pygame.init()
         self.pantalla_completa = False
-        # SCALED mantiene la resolución lógica 960x540 (16:9) y la
-        # estira a la pantalla: en un monitor 1080p el fullscreen es
-        # un 2x exacto, sin bordes negros. Fallback por si no existe.
-        try:
-            self.pantalla = pygame.display.set_mode(
-                (ANCHO_VENTANA, ALTO_VENTANA), pygame.SCALED)
-        except pygame.error:
-            self.pantalla = pygame.display.set_mode((ANCHO_VENTANA, ALTO_VENTANA))
+        # Todo el juego se dibuja en `pantalla`, el lienzo lógico de
+        # 960x540. En ventana se muestra 1:1; en pantalla completa el
+        # lienzo se estira al monitor (pixel art, vecino más cercano)
+        # y el TEXTO de la interfaz se renderiza aparte a resolución
+        # nativa vía SuperficieUI, así queda nítido (ver src/ui.py).
+        self._crear_ventana()
+        self.pantalla = pygame.Surface((ANCHO_VENTANA, ALTO_VENTANA)).convert()
+        self.sup_ui = SuperficieUI(self.pantalla)
         pygame.display.set_caption(TITULO)
         self.audio = Audio()
         self.audio.iniciar_musica()
@@ -127,7 +127,7 @@ class Juego:
         self.nombre_ui = PantallaNombre()
         self.partidas_ui = PantallaPartidas()
         self.hud = HUD()
-        self.fuente_mundo = pygame.font.Font(None, 22)
+        self.fuente_mundo = FuenteUI(22)
         self.capa_conos = pygame.Surface((ANCHO_VENTANA, ALTO_VENTANA), pygame.SRCALPHA)
         self.mostrar_panel = True   # TAB lo alterna
         self._gun_img = None        # sprite de pistola cacheado (16×16)
@@ -211,13 +211,21 @@ class Juego:
             elif self.estado == "dialogo":
                 self.dialogo.actualizar(dt)  # efecto máquina de escribir
             self._dibujar()
-            pygame.display.flip()
+            self._presentar()
         pygame.quit()
 
     # -----------------------------------------------------
     # Eventos (según estado)
     # -----------------------------------------------------
     def _manejar_evento(self, evento):
+        # El mouse llega en píxeles de la ventana real; el juego y los
+        # menús trabajan en coordenadas lógicas (960x540)
+        if (self.escala != 1.0 and evento.type in (
+                pygame.MOUSEMOTION, pygame.MOUSEBUTTONDOWN,
+                pygame.MOUSEBUTTONUP)):
+            datos = dict(evento.dict)
+            datos["pos"] = self._pos_logica(evento.pos)
+            evento = pygame.event.Event(evento.type, datos)
         if evento.type == pygame.QUIT:
             # Que cerrar la ventana nunca te haga perder el progreso
             if self.partida_activa:
@@ -415,7 +423,9 @@ class Juego:
                     self.estado = "jugando"
 
     def _usar_hotbar(self, indice):
-        """Teclas 1-9: usar el módulo del inventario rápido."""
+        """Teclas 1-8: usar el módulo del inventario rápido."""
+        if indice >= len(HOTBAR):
+            return
         id_item = HOTBAR[indice]
         if id_item == "arma":
             mensaje = self._alternar_arma()
@@ -460,25 +470,54 @@ class Juego:
                 COLOR_ERROR if self.debug else COLOR_ORO)
 
     def _alternar_pantalla_completa(self):
-        """Recrea la ventana con o sin FULLSCREEN. Más confiable que
-        toggle_fullscreen(), sobre todo en macOS. Si algún modo no
-        está disponible, degrada hasta la ventana simple."""
         self.pantalla_completa = not self.pantalla_completa
+        self._crear_ventana()
+
+    def _crear_ventana(self):
+        """Crea la ventana real y calcula la escala del lienzo lógico.
+        En pantalla completa se usa la resolución del escritorio: el
+        mundo se estira y el texto de la UI se dibuja nítido a esa
+        resolución."""
         try:
             if self.pantalla_completa:
-                self.pantalla = pygame.display.set_mode(
-                    (0, 0), pygame.SCALED | pygame.FULLSCREEN)
+                self.ventana = pygame.display.set_mode(
+                    (0, 0), pygame.FULLSCREEN)
             else:
-                self.pantalla = pygame.display.set_mode(
-                    (ANCHO_VENTANA, ALTO_VENTANA), pygame.SCALED)
+                self.ventana = pygame.display.set_mode(
+                    (ANCHO_VENTANA, ALTO_VENTANA))
         except pygame.error:
             self.pantalla_completa = False
-            try:
-                self.pantalla = pygame.display.set_mode(
-                    (ANCHO_VENTANA, ALTO_VENTANA), pygame.SCALED)
-            except pygame.error:
-                self.pantalla = pygame.display.set_mode(
-                    (ANCHO_VENTANA, ALTO_VENTANA))
+            self.ventana = pygame.display.set_mode(
+                (ANCHO_VENTANA, ALTO_VENTANA))
+        ancho, alto = self.ventana.get_size()
+        self.escala = min(ancho / ANCHO_VENTANA, alto / ALTO_VENTANA)
+        tam = (round(ANCHO_VENTANA * self.escala),
+               round(ALTO_VENTANA * self.escala))
+        # Bordes negros si la pantalla no es 16:9 (quedan de 0-2 px
+        # en los monitores comunes)
+        self.dx = (ancho - tam[0]) // 2
+        self.dy = (alto - tam[1]) // 2
+        self._lienzo_grande = (pygame.Surface(tam).convert()
+                               if self.escala != 1.0 else None)
+        fijar_escala(self.escala)
+
+    def _presentar(self):
+        """Compone el frame en la ventana real: el lienzo lógico
+        estirado (pixel art) + el texto de la UI a resolución nativa."""
+        if self._lienzo_grande is None:
+            self.ventana.blit(self.pantalla, (0, 0))
+        else:
+            pygame.transform.scale(
+                self.pantalla, self._lienzo_grande.get_size(),
+                self._lienzo_grande)
+            self.ventana.blit(self._lienzo_grande, (self.dx, self.dy))
+        self.sup_ui.volcar(self.ventana, self.escala, self.dx, self.dy)
+        pygame.display.flip()
+
+    def _pos_logica(self, pos):
+        """Ventana real → coordenadas lógicas (960x540) del juego."""
+        return ((pos[0] - self.dx) / self.escala,
+                (pos[1] - self.dy) / self.escala)
 
     def _cargar_gun(self):
         """Carga y cachea el sprite de la pistola escalado a 16×16."""
@@ -487,6 +526,9 @@ class Juego:
             ruta = Path("assets/sprites/icono_arma.png")
             if ruta.exists():
                 img = pygame.image.load(str(ruta)).convert_alpha()
+                # El PNG apunta a la izquierda; el código de rotación
+                # asume ángulo 0 = derecha, así que se espeja al cargar.
+                img = pygame.transform.flip(img, True, False)
                 self._gun_img = pygame.transform.smoothscale(img, (16, 16))
         return self._gun_img
 
@@ -1076,7 +1118,8 @@ class Juego:
         self.reloj_juego.actualizar(dt)
 
         # Apuntado con mouse (pasado a coordenadas de mundo)
-        mouse = pygame.Vector2(pygame.mouse.get_pos()) + self.camara.offset
+        mouse = (pygame.Vector2(self._pos_logica(pygame.mouse.get_pos()))
+                 + self.camara.offset)
         mira = mouse - pygame.Vector2(self.jugador.rect.center)
         if mira.length_squared() > 0:
             self.jugador.direccion_mira = mira.normalize()
@@ -1342,38 +1385,42 @@ class Juego:
     # -----------------------------------------------------
     def _dibujar(self):
         if self.estado == "menu":
-            self.menu.dibujar(self.pantalla)
+            self.menu.dibujar(self.sup_ui)
         elif self.estado == "nombre":
             texto = self.nombre_ui.texto.strip()
             pisa = bool(texto) and savegame.existe_nombre(texto)
             espacio = pisa or len(savegame.listar()) < savegame.MAX_PARTIDAS
-            self.nombre_ui.dibujar(self.pantalla, pisa, espacio)
+            self.nombre_ui.dibujar(self.sup_ui, pisa, espacio)
         elif self.estado == "partidas":
-            self.partidas_ui.dibujar(self.pantalla)
+            self.partidas_ui.dibujar(self.sup_ui)
         elif self.estado == "opciones":
-            self.opciones.dibujar(self.pantalla)
+            self.opciones.dibujar(self.sup_ui)
         else:
             self._dibujar_mundo()
+            if self.estado != "jugando":
+                # Barrera: el texto del HUD baja al lienzo para que el
+                # menú que se dibuja encima lo tape como corresponde
+                self.sup_ui.aplanar()
             if self.estado == "pausa":
-                self.pausa.dibujar(self.pantalla)
+                self.pausa.dibujar(self.sup_ui)
             elif self.estado == "tienda":
-                self.tienda.dibujar(self.pantalla, self.economia, self.jugador)
+                self.tienda.dibujar(self.sup_ui, self.economia, self.jugador)
             elif self.estado == "celular":
                 self.celular.dibujar(
-                    self.pantalla, self.economia, self.tratos,
+                    self.sup_ui, self.economia, self.tratos,
                     self.reloj_juego, self.mapa, self.jugador,
                     self.franquicias)
             elif self.estado == "inventario":
-                self.inventario_ui.dibujar(self.pantalla, self.economia,
+                self.inventario_ui.dibujar(self.sup_ui, self.economia,
                                            self.jugador)
             elif self.estado == "habilidades":
-                self.arbol.dibujar(self.pantalla, self.economia, self.habilidades)
+                self.arbol.dibujar(self.sup_ui, self.economia, self.habilidades)
             elif self.estado == "dialogo":
-                self.dialogo.dibujar(self.pantalla)
+                self.dialogo.dibujar(self.sup_ui)
             elif self.estado == "banco":
-                self.banco_ui.dibujar(self.pantalla, self.economia)
+                self.banco_ui.dibujar(self.sup_ui, self.economia)
             elif self.estado == "cocina":
-                self.cocina_ui.dibujar(self.pantalla, self.economia)
+                self.cocina_ui.dibujar(self.sup_ui, self.economia)
 
     def _dibujar_mundo(self):
         self.pantalla.fill(COLOR_FONDO)
@@ -1401,21 +1448,23 @@ class Juego:
         for bala in self.proyectiles:
             bala.dibujar(self.pantalla, self.camara)
         for texto in self.textos:
-            texto.dibujar(self.pantalla, self.camara, self.fuente_mundo)
+            texto.dibujar(self.sup_ui, self.camara, self.fuente_mundo)
         self._dibujar_alertas_enemigos()
         self._dibujar_flecha_encuentro()
         self.hud.dibujar(
-            self.pantalla, self.jugador, self.economia, self.produccion,
+            self.sup_ui, self.jugador, self.economia, self.produccion,
             self.reloj_juego, self._proximo_trato(),
             self._pista_interaccion(), self.busqueda, self.pedidos,
             round(self.reloj.get_fps()), self.mostrar_panel, self.mision,
             sin_leer=sum(1 for t in self.tratos if t.estado == "oferta"))
         if self.aviso:
-            self.hud.dibujar_aviso(self.pantalla, *self.aviso)
+            # El cartelón tapa lo que haya: bajar el texto encolado
+            self.sup_ui.aplanar()
+            self.hud.dibujar_aviso(self.sup_ui, *self.aviso)
         if self.debug:
             etiqueta = self.fuente_mundo.render(
                 "DEBUG · atravesás paredes", True, COLOR_ERROR)
-            self.pantalla.blit(etiqueta, (8, ALTO_VENTANA - 24))
+            self.sup_ui.blit(etiqueta, (8, ALTO_VENTANA - 24))
 
     def _dibujar_encuentros(self):
         """Marca violeta sobre la zona del/los tratos en curso."""
@@ -1431,7 +1480,7 @@ class Juego:
                 f"{trato.nombre_lugar} — "
                 f"{self.reloj_juego.texto_hora(trato.minuto_cita)}",
                 True, COLOR_PUNTO)
-            self.pantalla.blit(etiqueta, (rect.x + 5, rect.y + 4))
+            self.sup_ui.blit(etiqueta, (rect.x + 5, rect.y + 4))
 
     def _dibujar_flecha_encuentro(self):
         """Flecha hacia el encuentro activo (o el próximo trato)."""
@@ -1480,7 +1529,7 @@ class Juego:
     def _signo(self, enemigo, caracter, color):
         r = self.camara.aplicar(enemigo.rect)
         img = self.fuente_mundo.render(caracter, True, color)
-        self.pantalla.blit(img, (r.centerx - img.get_width() // 2, r.y - 22))
+        self.sup_ui.blit(img, (r.centerx - img.get_width() // 2, r.y - 22))
 
 
 def main():

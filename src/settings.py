@@ -40,6 +40,7 @@ COLOR_TEXTO       = (230, 230, 230)  # HUD
 COLOR_TEXTO_SUAVE  = (150, 150, 155)  # textos secundarios
 COLOR_ORO          = (222, 178, 84)   # títulos y selección de menú
 COLOR_DINERO       = (150, 215, 140)  # plata ganada
+COLOR_TARJETA      = (130, 180, 240)  # plata en el banco (tarjeta)
 COLOR_ERROR        = (235, 120, 105)  # avisos ("no te alcanza", etc.)
 COLOR_ZONA         = (255, 214, 100)  # zona de venta operativa
 COLOR_ZONA_FRIA    = (130, 170, 230)  # zona enfriándose
