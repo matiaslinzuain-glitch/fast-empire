@@ -21,19 +21,27 @@
 # de maceta y laboratorio siguen corriendo mientras jugás.
 # =========================================================
 
+import random
+
 from .inventory import Inventario
 
 SEGUNDOS_PLANTA = 60.0        # cuánto tarda la maceta
 SEGUNDOS_LABORATORIO = 45.0   # cuánto tarda una cocinada química
 
 # Recetas instantáneas de la mesa de trabajo, EN ORDEN de
-# prioridad (si el inventario cubre varias, sale la primera).
-# Cada entrada: (producto, {insumo: cantidad})
+# prioridad (si el inventario cubre varias, sale la primera:
+# el mejor tier primero — la mesa arma siempre lo más caro que
+# se pueda pagar). Cada entrada: (producto, {insumo: cantidad}).
+# Los tiers 2 y 3 los enseña el árbol de I+D (skilltree.py).
 RECETA_NATURAL = {"planta": 1, "ziploc": 1}
 RECETA_QUIMICO_MESA = {"compuestos": 1, "ziploc": 1}
 RECETAS_MESA = [
-    ("med_nat",  RECETA_NATURAL),
-    ("med_quim", RECETA_QUIMICO_MESA),
+    ("med_nat3",  {"planta": 3, "ziploc": 2}),
+    ("med_quim3", {"compuestos": 4, "ziploc": 2}),
+    ("med_nat2",  {"planta": 2, "ziploc": 1}),
+    ("med_quim2", {"compuestos": 2, "ziploc": 1}),
+    ("med_nat",   RECETA_NATURAL),
+    ("med_quim",  RECETA_QUIMICO_MESA),
 ]
 
 LISTA = -1.0   # marca de "terminó: cosechalo"
@@ -48,19 +56,33 @@ class Sotano:
         self.maceta = None
         self.laboratorio = None
         self.estante = Inventario()
+        # True si el ÚLTIMO crafteo salió gratis (Cultivo Abundante /
+        # Purificador de Mermas): main lo lee para el cartelito
+        self.ultimo_sin_insumos = False
 
     # -- helper genérico de crafteo (verifica, resta y suma) --
     @staticmethod
-    def craftear(inventario, receta, producto, cantidad=1):
-        """Si el inventario cubre la receta, la descuenta y agrega
+    def craftear(inventario, receta, producto, cantidad=1,
+                 consumir=True):
+        """Si el inventario cubre la receta, la descuenta (salvo que
+        una habilidad perdone los insumos: `consumir=False`) y agrega
         el producto. Devuelve True si craftéo."""
         if not all(inventario.tiene(id_item, n)
                    for id_item, n in receta.items()):
             return False
-        for id_item, n in receta.items():
-            inventario.quitar(id_item, n)
+        if consumir:
+            for id_item, n in receta.items():
+                inventario.quitar(id_item, n)
         inventario.agregar(producto, cantidad)
         return True
+
+    @staticmethod
+    def _permitido(producto, arbol):
+        """¿La partida ya sabe fabricar este producto? Sin árbol
+        (partidas/llamadas legado) solo se saben los tiers 1."""
+        if arbol is None:
+            return producto in ("med_nat", "med_quim")
+        return arbol.desbloqueado(producto)
 
     # -- maceta: semillas → (tiempo) → planta --
     def plantar(self, inventario):
@@ -77,36 +99,60 @@ class Sotano:
         return True
 
     # -- mesa de armado: multi-receta (al toque) --
-    def proxima_receta(self, inventario):
+    def proxima_receta(self, inventario, arbol=None):
         """Qué produciría la mesa con lo que hay en el inventario
-        (sin craftear). Devuelve el id del producto o None."""
+        (sin craftear, solo recetas ya investigadas). Devuelve el
+        id del producto o None."""
         for producto, receta in RECETAS_MESA:
+            if not self._permitido(producto, arbol):
+                continue
             if all(inventario.tiene(id_item, n)
                    for id_item, n in receta.items()):
                 return producto
         return None
 
-    def armar_en_mesa(self, inventario, producto=None):
-        """Evalúa las recetas de la mesa contra el inventario y
+    def armar_en_mesa(self, inventario, producto=None, arbol=None):
+        """Evalúa las recetas investigadas contra el inventario y
         craftea la primera cubierta (o solo `producto`, si se pide
-        uno puntual). Devuelve el id del producto armado o None."""
+        uno puntual). Cultivo Abundante / Purificador de Mermas
+        pueden perdonar los insumos (queda en `ultimo_sin_insumos`).
+        Devuelve el id del producto armado o None."""
+        self.ultimo_sin_insumos = False
         for prod, receta in RECETAS_MESA:
             if producto is not None and prod != producto:
                 continue
-            if self.craftear(inventario, receta, prod):
+            if not self._permitido(prod, arbol):
+                continue
+            gratis = (arbol is not None and
+                      random.random() < arbol.prob_insumos_gratis(prod))
+            if self.craftear(inventario, receta, prod,
+                             consumir=not gratis):
+                self.ultimo_sin_insumos = gratis
                 return prod
         return None
 
-    def armar_natural(self, inventario):
+    def armar_natural(self, inventario, arbol=None):
         """Atajo histórico: la receta natural puntual."""
-        return self.armar_en_mesa(inventario, "med_nat") == "med_nat"
+        return self.armar_en_mesa(inventario, "med_nat", arbol) == "med_nat"
 
     # -- laboratorio: compuestos → (tiempo) → med químico --
-    def iniciar_laboratorio(self, inventario):
-        if (self.laboratorio is not None
-                or not inventario.quitar("compuestos")):
+    def iniciar_laboratorio(self, inventario, arbol=None):
+        """Arranca una cocinada (si el árbol ya enseñó químicos).
+        Termodinámica acelera el fuego; el Purificador puede
+        perdonar el compuesto."""
+        if self.laboratorio is not None:
             return False
-        self.laboratorio = SEGUNDOS_LABORATORIO
+        if not self._permitido("med_quim", arbol):
+            return False
+        if not inventario.tiene("compuestos"):
+            return False
+        gratis = (arbol is not None and
+                  random.random() < arbol.prob_insumos_gratis("med_quim"))
+        if not gratis:
+            inventario.quitar("compuestos")
+        self.ultimo_sin_insumos = gratis
+        mult = arbol.mult_tiempo_lab() if arbol else 1.0
+        self.laboratorio = SEGUNDOS_LABORATORIO * mult
         return True
 
     def cosechar_laboratorio(self, inventario):

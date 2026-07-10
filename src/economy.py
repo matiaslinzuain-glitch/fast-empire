@@ -20,6 +20,7 @@ import pygame
 
 from .settings import TILE, COLOR_CAJA, COLOR_CAJA_CINTA
 from .inventory import Inventario
+from .skilltree import PRODUCTOS
 
 # --- Balance económico (todo junto para ajustar fácil) ---
 DINERO_INICIAL = 200
@@ -61,8 +62,10 @@ PEDIDOS = {
 }
 
 # --- Venta ilegal: precio base por unidad en el punto ---
-VENTA_MED = {"med_nat": 55, "med_quim": 95}
-NOMBRE_MED = {"med_nat": "naturales", "med_quim": "químicos"}
+# La tabla sale del árbol de I+D (skilltree.PRODUCTOS): los seis
+# tiers de medicamento con precios que escalan agresivo por tier.
+VENTA_MED = {pid: datos["precio"] for pid, datos in PRODUCTOS.items()}
+NOMBRE_MED = {pid: datos["plural"] for pid, datos in PRODUCTOS.items()}
 
 # Nombres legibles de todos los ítems del inventario dinámico
 NOMBRE_ITEM = {
@@ -72,6 +75,8 @@ NOMBRE_ITEM = {
     "med_quim": "Med. químicos", "ziploc": "Bolsas ziploc",
     "semillas": "Semillas",      "compuestos": "Compuestos",
     "planta": "Plantas",
+    "med_nat2": "Extractos botánicos", "med_nat3": "Panaceas",
+    "med_quim2": "Antivirales",        "med_quim3": "Sueros",
 }
 
 # --- Armas y curación (almacén del barrio) ---
@@ -196,10 +201,11 @@ class Economia:
         return precio
 
     def tiene_meds(self):
-        return self.med_nat + self.med_quim > 0
+        return any(self.inventario.tiene(pid) for pid in PRODUCTOS)
 
     def stock_med(self, tipo):
-        return self.med_nat if tipo == "med_nat" else self.med_quim
+        """Stock de cualquier tier de medicamento (id de PRODUCTOS)."""
+        return self.inventario.cantidad(tipo)
 
     def vender_trato(self, tipo, cantidad, precio_unit):
         """Cierra un trato acordado por celular: entrega hasta
@@ -208,14 +214,13 @@ class Economia:
         vendidas = min(cantidad, self.stock_med(tipo))
         if vendidas <= 0:
             return 0, 0
-        if tipo == "med_nat":
-            self.med_nat -= vendidas
-        else:
-            self.med_quim -= vendidas
+        self.inventario.quitar(tipo, vendidas)
         cobrado = vendidas * precio_unit
         self.dinero += cobrado
         self.total_ilegal += cobrado
-        self.puntos += PUNTOS_POR_VENTA * vendidas
+        # El XP escala por tier (skilltree): vender mejor
+        # medicamento también acelera la investigación
+        self.puntos += PRODUCTOS[tipo]["xp_venta"] * vendidas
         return vendidas, cobrado
 
     def es_amenaza(self):
@@ -223,9 +228,11 @@ class Economia:
         return self.total_ilegal >= UMBRAL_AMENAZA_RIVALES
 
     def _confiscar_meds(self):
-        confiscados = self.med_nat + self.med_quim
-        self.med_nat = 0
-        self.med_quim = 0
+        """Se pierde TODO medicamento encima, de cualquier tier."""
+        confiscados = 0
+        for pid in PRODUCTOS:
+            confiscados += self.inventario.cantidad(pid)
+            self.inventario.fijar(pid, 0)
         return confiscados
 
     def arresto(self):
@@ -344,8 +351,9 @@ class Vendedor:
         self.nombre = nombre
         self.descubierto = False   # ya tenés su contacto
         self.colocado = False      # ya trabaja en su zona
-        self.stock_nat = 0
-        self.stock_quim = 0
+        # {producto: unidades} — acepta CUALQUIER tier (skilltree):
+        # darle mejor mercadería multiplica lo que te reporta
+        self.stock = {}
         self.ventas = 0
         self.timer = random.uniform(*INTERVALO_VENTA_RED)
 
@@ -353,14 +361,32 @@ class Vendedor:
     def nombre_zona(self):
         return LUGARES_VENTA[self.zona_idx][0]
 
+    # Compatibilidad con la UI vieja (muestra N: y Q:)
+    @property
+    def stock_nat(self):
+        return self.stock.get("med_nat", 0)
+
+    @property
+    def stock_quim(self):
+        return self.stock.get("med_quim", 0)
+
     @property
     def stock_total(self):
-        return self.stock_nat + self.stock_quim
+        return sum(self.stock.values())
+
+    def agregar_stock(self, producto, cantidad=1):
+        self.stock[producto] = self.stock.get(producto, 0) + cantidad
+
+    def sacar_una(self, producto):
+        """Descuenta una unidad (el stack en cero desaparece)."""
+        self.stock[producto] -= 1
+        if self.stock[producto] <= 0:
+            del self.stock[producto]
 
     def a_dict(self):
         return {"zona": self.zona_idx, "nombre": self.nombre,
                 "descubierto": self.descubierto, "colocado": self.colocado,
-                "nat": self.stock_nat, "quim": self.stock_quim,
+                "stock": {p: n for p, n in sorted(self.stock.items()) if n > 0},
                 "ventas": self.ventas}
 
     @classmethod
@@ -368,8 +394,12 @@ class Vendedor:
         v = cls(datos["zona"], datos["nombre"])
         v.descubierto = datos.get("descubierto", False)
         v.colocado = datos.get("colocado", False)
-        v.stock_nat = datos.get("nat", 0)
-        v.stock_quim = datos.get("quim", 0)
+        v.stock = {p: n for p, n in datos.get("stock", {}).items()
+                   if p in PRODUCTOS and n > 0}
+        # Migración de partidas viejas (contadores "nat"/"quim")
+        for clave, pid in (("nat", "med_nat"), ("quim", "med_quim")):
+            if datos.get(clave, 0) > 0:
+                v.agregar_stock(pid, datos[clave])
         v.ventas = datos.get("ventas", 0)
         return v
 
@@ -491,20 +521,15 @@ class RedVentas:
         requisado = 0
         for vendedor in self.vendedores:
             requisado += vendedor.stock_total
-            vendedor.stock_nat = 0
-            vendedor.stock_quim = 0
+            vendedor.stock.clear()
         return requisado
 
     def depositar(self, vendedor, tipo, economia, cantidad=1):
-        """Le dejás mercadería tuya para que la venda."""
+        """Le dejás mercadería tuya (cualquier tier) para que la venda."""
         if economia.stock_med(tipo) < cantidad:
             return False
-        if tipo == "med_nat":
-            economia.med_nat -= cantidad
-            vendedor.stock_nat += cantidad
-        else:
-            economia.med_quim -= cantidad
-            vendedor.stock_quim += cantidad
+        economia.inventario.quitar(tipo, cantidad)
+        vendedor.agregar_stock(tipo, cantidad)
         return True
 
     def actualizar(self, dt, economia):
@@ -534,12 +559,12 @@ class RedVentas:
             if vendedor.timer > 0:
                 continue
             vendedor.timer = random.uniform(*INTERVALO_VENTA_RED)
-            if vendedor.stock_nat >= vendedor.stock_quim:
-                tipo = "med_nat"
-                vendedor.stock_nat -= 1
-            else:
-                tipo = "med_quim"
-                vendedor.stock_quim -= 1
+            # Vende del stack más grande (desempata por precio).
+            # La ganancia escala con el tier: proveerlos con mejor
+            # medicamento multiplica lo que reporta la red.
+            tipo = max(vendedor.stock,
+                       key=lambda p: (vendedor.stock[p], VENTA_MED[p]))
+            vendedor.sacar_una(tipo)
             ganancia = round(VENTA_MED[tipo] * (1 - COMISION_VENDEDOR))
             economia.dinero += ganancia
             economia.total_ilegal += ganancia
@@ -621,14 +646,19 @@ class Trato:
     """Una venta acordada por celular: comprador, mercadería, lugar
     y hora. Estados: oferta → aceptado → encuentro → hecho/fallido."""
 
-    def __init__(self, reloj, lugares_permitidos=None):
+    def __init__(self, reloj, lugares_permitidos=None, tipos_permitidos=None):
         self.comprador_nombre = random.choice(_NOMBRES_COMPRADOR)
         # Solo proponen encuentros en zonas que la red ya maneja
         if lugares_permitidos:
             self.lugar_idx = random.choice(lugares_permitidos)
         else:
             self.lugar_idx = random.randrange(len(LUGARES_VENTA))
-        self.tipo = random.choice(("med_nat", "med_quim"))
+        # El cliente pide del catálogo de la app Ventas
+        # (AppSalesManager.pedibles): solo tiers investigados Y
+        # marcados a la venta. main no crea tratos con lista vacía.
+        opciones = (list(tipos_permitidos) if tipos_permitidos
+                    else ["med_nat", "med_quim"])
+        self.tipo = random.choice(opciones)
         self.cantidad = random.randint(2, 5)
         self.precio_unit = round(VENTA_MED[self.tipo]
                                  * random.uniform(*BONUS_TRATO))

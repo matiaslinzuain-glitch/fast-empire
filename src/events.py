@@ -71,8 +71,9 @@ class PedidoVIP(Trato):
     (aceptar → cita → entregar con E) pero en grande. Todo o nada,
     ventana corta y riesgo de emboscada al cobrar."""
 
-    def __init__(self, reloj, lugares_permitidos=None):
-        super().__init__(reloj, lugares_permitidos)
+    def __init__(self, reloj, lugares_permitidos=None,
+                 tipos_permitidos=None):
+        super().__init__(reloj, lugares_permitidos, tipos_permitidos)
         self.vip = True
         self.cantidad = random.randint(*VIP_CANTIDAD)
         self.precio_unit = round(VENTA_MED[self.tipo]
@@ -164,9 +165,12 @@ class GestorEventos:
                      if e.tipo_evento == "soborno"), None)
 
     # -- ciclo --
-    def actualizar(self, dt, economia, red, reloj, tratos):
+    def actualizar(self, dt, economia, red, reloj, tratos,
+                   tipos_pedibles=None):
         """Devuelve avisos para main: [("vip", trato), ("flash", ev),
-        ("flash_vencido", ev), ("soborno", ev), ("castigo", ev)]."""
+        ("flash_vencido", ev), ("soborno", ev), ("castigo", ev)].
+        `tipos_pedibles` viene de la app Ventas (AppSalesManager):
+        los VIP solo piden esos tiers (lista vacía = no hay VIPs)."""
         if not red.flaco_desbloqueado:
             return []               # todavía sos vendedor de calle
         avisos = []
@@ -178,8 +182,11 @@ class GestorEventos:
             activos = sum(1 for t in tratos
                           if t.estado in ("aceptado", "encuentro"))
             hay_oferta_vip = any(t.estado == "oferta" for t in tratos)
-            if not hay_oferta_vip and activos < MAX_TRATOS_ACTIVOS:
-                trato = PedidoVIP(reloj, red.lugares_para_tratos())
+            sin_catalogo = tipos_pedibles is not None and not tipos_pedibles
+            if (not hay_oferta_vip and activos < MAX_TRATOS_ACTIVOS
+                    and not sin_catalogo):
+                trato = PedidoVIP(reloj, red.lugares_para_tratos(),
+                                  tipos_pedibles)
                 tratos.append(trato)
                 avisos.append(("vip", trato))
 

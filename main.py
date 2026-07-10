@@ -17,7 +17,7 @@
 #
 # Estados: menu · nombre · partidas · opciones · jugando ·
 #   pausa · tienda · celular · inventario · habilidades ·
-#   dialogo · banco · vendedor · cocina · estante
+#   medicamentos · dialogo · banco · vendedor · cocina · estante
 #
 # Ejecutar desde esta carpeta:  python main.py
 # =========================================================
@@ -65,11 +65,13 @@ from src.enemies import (
     crear_inspectores, crear_matones,
 )
 from src.skills import Habilidades
+from src.skilltree import SkillTree, AppSalesManager, PRODUCTOS
 from src.ui import (
     HUD, TextoFlotante, MAX_HOTBAR,
     MenuPrincipal, PantallaOpciones, MenuPausa,
     PantallaTienda, PantallaCelular, PantallaInventario,
-    PantallaHabilidades, PantallaBanco, PantallaVendedor,
+    PantallaHabilidades, PantallaArbolMedicamentos,
+    PantallaBanco, PantallaVendedor,
     PantallaCocina, PantallaNombre, PantallaPartidas,
     PantallaEstante,
     SuperficieUI, FuenteUI, fijar_escala,
@@ -134,6 +136,7 @@ class Juego:
         self.celular = PantallaCelular()
         self.inventario_ui = PantallaInventario()
         self.arbol = PantallaHabilidades()
+        self.arbol_meds_ui = PantallaArbolMedicamentos()
         self.dialogo = CajaDialogo()
         self.banco_ui = PantallaBanco()
         self.vendedor_ui = PantallaVendedor()
@@ -171,6 +174,8 @@ class Juego:
         self.produccion = Produccion()
         self.sotano = Sotano()   # crafteo: maceta, laboratorio, estante
         self.habilidades = Habilidades()
+        self.arbol_meds = SkillTree()      # I+D de medicamentos (tiers)
+        self.app_ventas = AppSalesManager()  # app del celular: qué vender
         self.reloj_juego = RelojJuego()
         self.textos = []
 
@@ -368,6 +373,9 @@ class Juego:
                 elif evento.key == pygame.K_t:
                     self.arbol.abrir()
                     self.estado = "habilidades"
+                elif evento.key == pygame.K_r:
+                    self.arbol_meds_ui.abrir()
+                    self.estado = "medicamentos"
                 elif evento.key == pygame.K_TAB:
                     self.mostrar_panel = not self.mostrar_panel
                 elif pygame.K_1 <= evento.key <= pygame.K_9:
@@ -403,7 +411,7 @@ class Juego:
         elif self.estado == "celular":
             accion = self.celular.manejar_evento(
                 evento, self.economia, self.tratos, self.reloj_juego,
-                self.red, self.gestor)
+                self.red, self.gestor, self.arbol_meds, self.app_ventas)
             if accion == "cerrar":
                 self.estado = "jugando"
             elif isinstance(accion, tuple):
@@ -430,8 +438,24 @@ class Juego:
                     self.inventario_ui.mensaje = self._alternar_arma()
 
         elif self.estado == "habilidades":
+            # R salta al otro árbol (el de I+D de medicamentos)
+            if evento.type == pygame.KEYDOWN and evento.key == pygame.K_r:
+                self.arbol_meds_ui.abrir()
+                self.estado = "medicamentos"
+                return
             accion = self.arbol.manejar_evento(
                 evento, self.economia, self.habilidades, self.jugador)
+            if accion == "cerrar":
+                self.estado = "jugando"
+
+        elif self.estado == "medicamentos":
+            # T vuelve al árbol clásico de habilidades
+            if evento.type == pygame.KEYDOWN and evento.key == pygame.K_t:
+                self.arbol.abrir()
+                self.estado = "habilidades"
+                return
+            accion = self.arbol_meds_ui.manejar_evento(
+                evento, self.economia, self.arbol_meds)
             if accion == "cerrar":
                 self.estado = "jugando"
 
@@ -716,11 +740,21 @@ class Juego:
         if self.timer_oferta_trato <= 0:
             self.timer_oferta_trato = random.uniform(*INTERVALO_OFERTA)
             ofertas = sum(1 for t in self.tratos if t.estado == "oferta")
+            # Los clientes leen la app Ventas: solo piden los tiers
+            # investigados Y marcados "a la venta" (catálogo vacío =
+            # nadie te escribe)
+            pedibles = self.app_ventas.pedibles(self.arbol_meds)
             if (not self.red.flaco_desbloqueado
                     and ofertas < MAX_OFERTAS
-                    and len(self._tratos_aceptados()) < MAX_TRATOS_ACTIVOS):
-                self.tratos.append(Trato(self.reloj_juego,
-                                         self.red.lugares_para_tratos()))
+                    and len(self._tratos_aceptados()) < MAX_TRATOS_ACTIVOS
+                    and pedibles):
+                trato = Trato(self.reloj_juego,
+                              self.red.lugares_para_tratos(), pedibles)
+                # Empaque Ecológico: +15% en venta directa nat T1/T2
+                trato.precio_unit = round(
+                    trato.precio_unit
+                    * self.arbol_meds.mult_precio(trato.tipo))
+                self.tratos.append(trato)
                 self.audio.reproducir("pedido")
                 self._texto_sobre_jugador(
                     "Mensaje nuevo en el celular (C)", COLOR_PUNTO)
@@ -759,10 +793,15 @@ class Juego:
     def _actualizar_eventos(self, dt):
         """El GestorEventos decide qué pasa; acá se le pone mundo:
         NPCs, avisos y sonido."""
-        avisos = self.gestor.actualizar(dt, self.economia, self.red,
-                                        self.reloj_juego, self.tratos)
+        avisos = self.gestor.actualizar(
+            dt, self.economia, self.red, self.reloj_juego, self.tratos,
+            self.app_ventas.pedibles(self.arbol_meds))
         for tipo_ev, evento in avisos:
             if tipo_ev == "vip":
+                # Empaque Ecológico también mejora la venta directa VIP
+                evento.precio_unit = round(
+                    evento.precio_unit
+                    * self.arbol_meds.mult_precio(evento.tipo))
                 self.audio.reproducir("pedido")
                 self._texto_sobre_jugador(
                     "Un pesado te escribió al celular (C)", COLOR_PUNTO)
@@ -1017,15 +1056,22 @@ class Juego:
                 "No tenés semillas (se piden por el celular)", COLOR_ERROR)
 
     def _usar_mesa(self):
-        """E frente a la mesa de armado. La mesa evalúa sus recetas
-        contra el inventario y arma la primera cubierta:
-        planta + ziploc → natural · compuesto + ziploc → químico."""
-        producto = self.sotano.armar_en_mesa(self.economia.inventario)
+        """E frente a la mesa de armado. La mesa evalúa las recetas
+        YA INVESTIGADAS (árbol de I+D, tecla R) contra el inventario
+        y arma la primera cubierta — el mejor tier primero."""
+        producto = self.sotano.armar_en_mesa(self.economia.inventario,
+                                             arbol=self.arbol_meds)
         if producto is not None:
             self.audio.reproducir("cocinado")
+            extra = (" — ¡sin gastar insumos!"
+                     if self.sotano.ultimo_sin_insumos else "")
             self._texto_sobre_jugador(
-                f"+1 medicamento {'natural' if producto == 'med_nat' else 'químico'}"
-                " embolsado", COLOR_DINERO)
+                f"+1 {PRODUCTOS[producto]['nombre']} embolsado{extra}",
+                COLOR_DINERO)
+        elif not self.arbol_meds.productos_desbloqueados():
+            self._texto_sobre_jugador(
+                "No sabés ninguna receta — investigá en el árbol (R)",
+                COLOR_ERROR)
         else:
             self._texto_sobre_jugador(
                 "La mesa pide: planta + ziploc, o compuesto + ziploc",
@@ -1040,9 +1086,16 @@ class Juego:
             self._texto_sobre_jugador(
                 f"Cocinando… faltan {int(self.sotano.laboratorio) + 1}s",
                 COLOR_ORO)
-        elif self.sotano.iniciar_laboratorio(inventario):
+        elif not self.arbol_meds.desbloqueado("med_quim"):
+            self._texto_sobre_jugador(
+                "No sabés cocinar químicos — investigá en el árbol (R)",
+                COLOR_ERROR)
+        elif self.sotano.iniciar_laboratorio(inventario, self.arbol_meds):
             self.audio.reproducir("cocinado")
-            self._texto_sobre_jugador("Compuesto al fuego", COLOR_DINERO)
+            extra = (" — ¡sin gastar el compuesto!"
+                     if self.sotano.ultimo_sin_insumos else "")
+            self._texto_sobre_jugador(f"Compuesto al fuego{extra}",
+                                      COLOR_DINERO)
         else:
             self._texto_sobre_jugador(
                 "No tenés compuestos (se piden por el celular)", COLOR_ERROR)
@@ -1678,21 +1731,23 @@ class Juego:
                 return f"La planta crece… {int(self.sotano.maceta) + 1}s"
             return f"E — Plantar una semilla (tenés {self.economia.semillas})"
         if self._cerca_de(self.mapa.tiles_mesa):
-            proximo = self.sotano.proxima_receta(self.economia.inventario)
+            proximo = self.sotano.proxima_receta(self.economia.inventario,
+                                                 self.arbol_meds)
             stock = (f"(P:{self.economia.planta} "
                      f"C:{self.economia.compuestos} "
                      f"Z:{self.economia.ziploc})")
-            if proximo == "med_nat":
-                return f"E — Armar med NATURAL: planta + ziploc {stock}"
-            if proximo == "med_quim":
-                return f"E — Armar med QUÍMICO: compuesto + ziploc {stock}"
-            return ("Mesa de armado — pide planta + ziploc o "
-                    f"compuesto + ziploc {stock}")
+            if proximo is not None:
+                return f"E — Armar {PRODUCTOS[proximo]['nombre']} {stock}"
+            if not self.arbol_meds.productos_desbloqueados():
+                return "Mesa de armado — investigá recetas en el árbol (R)"
+            return f"Mesa de armado — te faltan insumos {stock}"
         if self._cerca_de(self.mapa.tiles_laboratorio):
             if self.sotano.laboratorio == LISTA:
                 return "E — Retirar el medicamento químico"
             if self.sotano.laboratorio is not None:
                 return f"Cocinando… {int(self.sotano.laboratorio) + 1}s"
+            if not self.arbol_meds.desbloqueado("med_quim"):
+                return "Laboratorio — investigá químicos en el árbol (R)"
             return ("E — Cocinar un compuesto "
                     f"(tenés {self.economia.compuestos})")
         if self._cerca_de(self.mapa.tiles_estante):
@@ -1741,12 +1796,16 @@ class Juego:
                 self.celular.dibujar(
                     self.sup_ui, self.economia, self.tratos,
                     self.reloj_juego, self.mapa, self.jugador,
-                    self.red, self.gestor)
+                    self.red, self.gestor, self.arbol_meds,
+                    self.app_ventas)
             elif self.estado == "inventario":
                 self.inventario_ui.dibujar(self.sup_ui, self.economia,
                                            self.jugador)
             elif self.estado == "habilidades":
                 self.arbol.dibujar(self.sup_ui, self.economia, self.habilidades)
+            elif self.estado == "medicamentos":
+                self.arbol_meds_ui.dibujar(self.sup_ui, self.economia,
+                                           self.arbol_meds)
             elif self.estado == "dialogo":
                 self.dialogo.dibujar(self.sup_ui)
             elif self.estado == "banco":

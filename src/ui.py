@@ -15,6 +15,8 @@
 #   (W/S + E/Enter) sigue funcionando igual.
 # =========================================================
 
+import math
+
 import pygame
 from pathlib import Path
 
@@ -38,6 +40,7 @@ from .economy import (
     NOMBRE_MED, NOMBRE_ITEM,
 )
 from .skills import ARBOL
+from .skilltree import NODOS, PRODUCTOS
 
 
 # ---------------------------------------------------------
@@ -816,8 +819,9 @@ class PantallaOpciones(_MenuVertical):
         "W A S D — moverse   ·   Mouse — apuntar   ·   Click izq. — atacar",
         "Click der. (sostener) — mira   ·   E — interactuar",
         "C — celular (pedidos, mapa, mensajes)   ·   O — inventario",
-        "1-8 — inventario rápido   ·   T — habilidades   ·   TAB — ocultar HUD",
-        "F11 o Cmd+F — pantalla completa   ·   F5 — guardar   ·   ESC — pausa",
+        "1-8 — inventario rápido   ·   T — habilidades   ·   R — medicamentos",
+        "TAB — ocultar HUD   ·   F11 o Cmd+F — pantalla completa",
+        "F5 — guardar   ·   ESC — pausa",
     ]
 
     def __init__(self):
@@ -844,12 +848,12 @@ class PantallaOpciones(_MenuVertical):
         superficie.fill(COLOR_FONDO)
         titulo = self.fuente_titulo.render("OPCIONES", True, COLOR_ORO)
         superficie.blit(titulo, ((ANCHO_VENTANA - titulo.get_width()) // 2, 40))
-        y = 112
+        y = 108
         for texto in self.CONTROLES:
             img = self.fuente_chica.render(texto, True, COLOR_TEXTO_SUAVE)
             superficie.blit(img, ((ANCHO_VENTANA - img.get_width()) // 2, y))
-            y += 27
-        self._dibujar_opciones(superficie, 275, interlinea=48)
+            y += 24
+        self._dibujar_opciones(superficie, 278, interlinea=48)
         pie = self.fuente_chica.render(
             "Mouse o W/S + ENTER  ·  ESC volver", True, COLOR_TEXTO_SUAVE)
         superficie.blit(pie, ((ANCHO_VENTANA - pie.get_width()) // 2, ALTO_VENTANA - 35))
@@ -997,7 +1001,7 @@ class PantallaTienda(_MenuVertical):
 # C o E en el teléfono del local lo abre/cierra.
 # ---------------------------------------------------------
 class PantallaCelular:
-    APPS = ["Comidas", "Insumos", "Mapa", "Mensajes", "Red"]
+    APPS = ["Comidas", "Insumos", "Mapa", "Mensajes", "Red", "Ventas"]
     IDS_COMIDA    = ["ing6", "ing12"]
     # Ya no se compran medicamentos hechos: se compran los insumos
     # y se fabrica en el sótano del local
@@ -1018,6 +1022,7 @@ class PantallaCelular:
         ("Mapa",     ( 35,  90, 160)),
         ("Mensajes", ( 30, 140,  75)),
         ("Red",      (110,  60, 150)),
+        ("Ventas",   (170, 130, 30)),
     ]
 
     def __init__(self):
@@ -1050,7 +1055,7 @@ class PantallaCelular:
 
     # ── eventos ────────────────────────────────────────────
     def manejar_evento(self, evento, economia, tratos, reloj, red,
-                       gestor):
+                       gestor, arbol=None, app_ventas=None):
         """→ "cerrar" | ("pedido", id) | ("aceptar", t) |
            ("rechazar", t) | ("pagar_soborno", ev) | None"""
         if evento.type == pygame.KEYDOWN:
@@ -1074,6 +1079,8 @@ class PantallaCelular:
                 return self._ev_mensajes(evento, tratos, gestor)
             elif self.app == 4:
                 return self._ev_red(evento, economia, red)
+            elif self.app == 5:
+                return self._ev_ventas(evento, arbol, app_ventas)
         elif evento.type == pygame.MOUSEBUTTONDOWN and evento.button == 1:
             if self.en_home:
                 for i, r in enumerate(self._rects_home):
@@ -1097,6 +1104,8 @@ class PantallaCelular:
                         return self._activar_mensaje(tratos, gestor)
                     if self.app == 4:
                         self._colocar_vendedor(economia, red)
+                    elif self.app == 5:
+                        self._alternar_venta(arbol, app_ventas)
         elif evento.type == pygame.MOUSEMOTION:
             if self.en_home:
                 for i, r in enumerate(self._rects_home):
@@ -1162,6 +1171,41 @@ class PantallaCelular:
             self.mensaje = ("Todavía no es tuya esa zona — "
                             "eliminá a sus matones.")
             self.color_mensaje = COLOR_ERROR
+
+    def _ev_ventas(self, evento, arbol, app_ventas):
+        """App Ventas: W/S elige un medicamento investigado,
+        E/Enter alterna su casilla "a la venta". Los clientes del
+        celular solo piden lo que esté prendido."""
+        if arbol is None or app_ventas is None:
+            return None
+        catalogo = app_ventas.catalogo(arbol)
+        if not catalogo:
+            return None
+        n = len(catalogo)
+        self.seleccion %= n
+        if evento.key in (pygame.K_w, pygame.K_UP):
+            self.seleccion = (self.seleccion - 1) % n
+        elif evento.key in (pygame.K_s, pygame.K_DOWN):
+            self.seleccion = (self.seleccion + 1) % n
+        elif evento.key in (pygame.K_RETURN, pygame.K_e, pygame.K_SPACE):
+            self._alternar_venta(arbol, app_ventas)
+        return None
+
+    def _alternar_venta(self, arbol, app_ventas):
+        if arbol is None or app_ventas is None:
+            return
+        catalogo = app_ventas.catalogo(arbol)
+        if not catalogo:
+            return
+        producto = catalogo[self.seleccion % len(catalogo)][0]
+        prendido = app_ventas.alternar(producto, arbol)
+        nombre = PRODUCTOS[producto]["nombre"]
+        if prendido:
+            self.mensaje = f"{nombre}: A LA VENTA."
+            self.color_mensaje = COLOR_DINERO
+        else:
+            self.mensaje = f"{nombre}: retirado del catálogo."
+            self.color_mensaje = COLOR_TEXTO_SUAVE
 
     def _ev_lista(self, evento, economia, ids, es_comida):
         n = max(1, len(ids))
@@ -1230,7 +1274,7 @@ class PantallaCelular:
 
     # ── dibujo principal ───────────────────────────────────
     def dibujar(self, superficie, economia, tratos, reloj, mapa,
-                jugador, red, gestor):
+                jugador, red, gestor, arbol=None, app_ventas=None):
         velo = _panel(ANCHO_VENTANA, ALTO_VENTANA, alpha=150)
         superficie.blit(velo, (0, 0))
 
@@ -1254,7 +1298,8 @@ class PantallaCelular:
                              mapa, jugador, tratos, red, reloj, gestor)
         else:
             self._frame_port(superficie, x, y, aw, ah,
-                             economia, tratos, reloj, red, gestor)
+                             economia, tratos, reloj, red, gestor,
+                             arbol, app_ventas)
 
         pie_txt = ("WASD — nav  ·  ENTER — abrir  ·  C — cerrar"
                    if self.en_home else
@@ -1352,13 +1397,22 @@ class PantallaCelular:
                 for n_pos in nodos:
                     pygame.draw.circle(sup.raw, (230, 210, 250), n_pos, 6)
                     pygame.draw.circle(sup.raw, color, n_pos, 3)
+            elif i == 5:  # Ventas: etiqueta de precio con $
+                pts = [(cx - 17, cy - 11), (cx + 5, cy - 11), (cx + 17, cy),
+                       (cx + 5, cy + 11), (cx - 17, cy + 11)]
+                pygame.draw.polygon(sup.raw, (250, 232, 190), pts)
+                pygame.draw.polygon(sup.raw, (150, 115, 30), pts, 2)
+                pygame.draw.circle(sup.raw, (150, 115, 30), (cx - 11, cy), 2)
+                dolar = self.fuente_chica.render("$", True, (90, 65, 15))
+                sup.blit(dolar, (cx - dolar.get_width() // 2 + 3,
+                                 cy - dolar.get_height() // 2))
 
             etq = self.fuente_chica.render(nombre, True, COLOR_TEXTO)
             sup.blit(etq, (rect.centerx - etq.get_width() // 2, rect.bottom + 4))
 
-    # ── Portrait (apps 0, 1, 3, 4) ─────────────────────────
+    # ── Portrait (apps 0, 1, 3, 4, 5) ──────────────────────
     def _frame_port(self, sup, x, y, aw, ah, economia, tratos, reloj,
-                    red, gestor):
+                    red, gestor, arbol=None, app_ventas=None):
         # Notch + pantalla (toda la altura: no hay barra de apps,
         # se vuelve al home con ESC para cambiar de app)
         pygame.draw.rect(sup.raw, (10, 10, 12),
@@ -1375,6 +1429,8 @@ class PantallaCelular:
                             "Insumos", self.IDS_ILEGALES, False)
         elif self.app == 4:
             self._app_red(sup, cont, economia, red)
+        elif self.app == 5:
+            self._app_ventas(sup, cont, economia, arbol, app_ventas)
         else:
             self._app_mensajes(sup, cont, tratos, reloj, gestor)
 
@@ -1652,6 +1708,71 @@ class PantallaCelular:
             f"comisión {int(COMISION_VENDEDOR * 100)}%",
             True, COLOR_TEXTO_SUAVE),
             (zona.x + 8, zona.bottom - 36))
+        if self.mensaje:
+            sup.blit(self.fuente_chica.render(
+                self.mensaje, True, self.color_mensaje),
+                (zona.x + 8, zona.bottom - 20))
+
+    def _app_ventas(self, sup, zona, economia, arbol=None,
+                    app_ventas=None):
+        """App Ventas: una casilla por medicamento investigado.
+        Lo prendido es lo ÚNICO que piden los clientes del celular
+        (¿sin stock de un tier? apagalo y piden lo demás)."""
+        sup.blit(self.fuente_titulo.render("Ventas", True, COLOR_ORO),
+                 (zona.x + 10, zona.y + 4))
+        self._rects_items = []
+        if arbol is None or app_ventas is None:
+            return
+        catalogo = app_ventas.catalogo(arbol)
+        if not catalogo:
+            y = zona.centery - 40
+            for txt in ("Catálogo vacío.", "",
+                        "Investigá medicamentos en el",
+                        "árbol de I+D (tecla R)."):
+                img = self.fuente_chica.render(txt, True, COLOR_TEXTO_SUAVE)
+                sup.blit(img, (zona.centerx - img.get_width() // 2, y))
+                y += 22
+            return
+
+        y = zona.y + 38
+        for i, (producto, prendido) in enumerate(catalogo):
+            datos = PRODUCTOS[producto]
+            r = pygame.Rect(zona.x + 6, y, zona.width - 12, 52)
+            self._rects_items.append(r)
+            elegido = i == self.seleccion
+            pygame.draw.rect(sup.raw,
+                             (36, 38, 48) if elegido else (24, 26, 34),
+                             r, border_radius=8)
+            if elegido:
+                pygame.draw.rect(sup.raw, COLOR_APP_ACTIVA, r, 1,
+                                 border_radius=8)
+            # La casilla de "a la venta"
+            caja = pygame.Rect(r.x + 8, r.centery - 8, 16, 16)
+            pygame.draw.rect(sup.raw, (18, 20, 26), caja, border_radius=4)
+            pygame.draw.rect(sup.raw,
+                             COLOR_DINERO if prendido else COLOR_TEXTO_SUAVE,
+                             caja, 1, border_radius=4)
+            if prendido:
+                pygame.draw.line(sup.raw, COLOR_DINERO,
+                                 (caja.x + 3, caja.centery),
+                                 (caja.centerx - 1, caja.bottom - 4), 2)
+                pygame.draw.line(sup.raw, COLOR_DINERO,
+                                 (caja.centerx - 1, caja.bottom - 4),
+                                 (caja.right - 3, caja.y + 3), 2)
+            color_n = COLOR_TEXTO if prendido else COLOR_TEXTO_SUAVE
+            sup.blit(self.fuente_chica.render(
+                f"{datos['nombre']}  (T{datos['tier']})", True, color_n),
+                (r.x + 32, r.y + 7))
+            stock = economia.stock_med(producto)
+            sup.blit(self.fuente_mini.render(
+                f"${datos['precio']} c/u  ·  stock encima: {stock}", True,
+                COLOR_DINERO if prendido else COLOR_TEXTO_SUAVE),
+                (r.x + 32, r.y + 28))
+            y += 56
+
+        sup.blit(self.fuente_mini.render(
+            "E — a la venta sí/no  ·  los clientes piden solo lo prendido",
+            True, COLOR_TEXTO_SUAVE), (zona.x + 8, zona.bottom - 36))
         if self.mensaje:
             sup.blit(self.fuente_chica.render(
                 self.mensaje, True, self.color_mensaje),
@@ -2177,8 +2298,205 @@ class PantallaHabilidades:
             img = self.fuente_chica.render(self.mensaje, True, self.color_mensaje)
             superficie.blit(img, ((ANCHO_VENTANA - img.get_width()) // 2, 476))
         pie = self.fuente_chica.render(
-            "Mouse o WASD + ENTER comprar  ·  T/ESC cerrar", True, COLOR_TEXTO_SUAVE)
+            "Mouse o WASD + ENTER comprar  ·  R — árbol de medicamentos"
+            "  ·  T/ESC cerrar", True, COLOR_TEXTO_SUAVE)
         superficie.blit(pie, ((ANCHO_VENTANA - pie.get_width()) // 2, ALTO_VENTANA - 26))
+
+
+# ---------------------------------------------------------
+# Árbol de I+D de medicamentos (tecla R): constelación con dos
+# ramas — natural (izquierda, verde) y sintética (derecha,
+# violeta) — que nacen de un centro. El tronco de cada rama
+# desbloquea el próximo tier de medicamento; las ramas cortas
+# son callejones sin salida con mejoras utilitarias. El coste
+# en XP crece exponencial con la profundidad (skilltree.py).
+# ---------------------------------------------------------
+COLOR_NODO_BLOQUEADO = (54, 54, 60)
+COLOR_LINEA_APAGADA = (68, 68, 74)
+
+
+class PantallaArbolMedicamentos:
+    """La constelación de I+D. Mouse o flechas + ENTER/click
+    investigan un nodo; el hover muestra el panel lateral con
+    nombre, coste y descripción."""
+
+    CENTRO = (338, 300)
+    ESCALA = 0.62
+    RADIO_NODO = 15
+    ANCHO_PANEL = 250
+    _ORDEN = list(NODOS.keys())
+
+    def __init__(self):
+        self.fuente_titulo = FuenteUI(40)
+        self.fuente = FuenteUI(24)
+        self.fuente_chica = FuenteUI(19)
+        self.fuente_desc = FuenteUI(18)
+        self.sel = self._ORDEN[0]     # id del nodo resaltado/hover
+        self.mensaje = ""
+        self.color_mensaje = COLOR_TEXTO
+        self._rects = {}              # id del nodo -> rect clickeable
+
+    def abrir(self):
+        self.mensaje = ""
+
+    def _punto(self, nodo):
+        """Posición del nodo en pantalla (centro + su offset escalado)."""
+        cx, cy = self.CENTRO
+        x, y = nodo.pos
+        return cx + x * self.ESCALA, cy + y * self.ESCALA
+
+    def _color_rama(self, rama):
+        return COLOR_MED_NAT if rama == "natural" else COLOR_MED_QUIM
+
+    def _radio(self, nodo):
+        return self.RADIO_NODO + 2 if nodo.tipo == "tronco" else self.RADIO_NODO - 3
+
+    def manejar_evento(self, evento, economia, arbol):
+        if evento.type == pygame.KEYDOWN:
+            if evento.key in (pygame.K_ESCAPE, pygame.K_r):
+                return "cerrar"
+            if evento.key in (pygame.K_RETURN, pygame.K_e, pygame.K_SPACE):
+                self._investigar(economia, arbol)
+            elif evento.key in (pygame.K_a, pygame.K_LEFT,
+                                pygame.K_w, pygame.K_UP):
+                idx = self._ORDEN.index(self.sel)
+                self.sel = self._ORDEN[(idx - 1) % len(self._ORDEN)]
+            elif evento.key in (pygame.K_d, pygame.K_RIGHT,
+                                pygame.K_s, pygame.K_DOWN, pygame.K_TAB):
+                idx = self._ORDEN.index(self.sel)
+                self.sel = self._ORDEN[(idx + 1) % len(self._ORDEN)]
+        elif evento.type == pygame.MOUSEMOTION:
+            for id_nodo, rect in self._rects.items():
+                if rect.collidepoint(evento.pos):
+                    self.sel = id_nodo
+                    break
+        elif evento.type == pygame.MOUSEBUTTONDOWN and evento.button == 1:
+            for id_nodo, rect in self._rects.items():
+                if rect.collidepoint(evento.pos):
+                    self.sel = id_nodo
+                    self._investigar(economia, arbol)
+                    break
+        return None
+
+    def _investigar(self, economia, arbol):
+        ok, mensaje = arbol.comprar(self.sel, economia)
+        self.mensaje = mensaje
+        self.color_mensaje = COLOR_DINERO if ok else COLOR_ERROR
+
+    def dibujar(self, superficie, economia, arbol):
+        ancho_libre = ANCHO_VENTANA - self.ANCHO_PANEL - 20
+        velo = _panel(ANCHO_VENTANA, ALTO_VENTANA, alpha=205)
+        superficie.blit(velo, (0, 0))
+        titulo = self.fuente_titulo.render("MEDICAMENTOS — I+D", True, COLOR_ORO)
+        superficie.blit(titulo, ((ancho_libre - titulo.get_width()) // 2, 18))
+        recursos = self.fuente.render(f"XP: {economia.puntos}", True, COLOR_TEXTO)
+        superficie.blit(recursos, (20, 22))
+
+        cx, cy = self.CENTRO
+        # -- líneas, por debajo de los nodos --
+        for nodo in NODOS.values():
+            px, py = self._punto(nodo)
+            comprado = arbol.tiene(nodo.id)
+            color = self._color_rama(nodo.rama) if comprado else COLOR_LINEA_APAGADA
+            ancho_linea = 3 if comprado else 1
+            if not nodo.padres:
+                pygame.draw.line(superficie.raw, color, (cx, cy), (px, py), ancho_linea)
+            for id_padre in nodo.padres:
+                ppx, ppy = self._punto(NODOS[id_padre])
+                pygame.draw.line(superficie.raw, color, (ppx, ppy), (px, py), ancho_linea)
+        pygame.draw.circle(superficie.raw, COLOR_ORO, (cx, cy), 6)
+
+        # -- nodos --
+        self._rects = {}
+        parpadeo = 0.5 + 0.5 * math.sin(pygame.time.get_ticks() / 260.0)
+        for nodo in NODOS.values():
+            px, py = (round(v) for v in self._punto(nodo))
+            estado = arbol.estado(nodo.id)
+            color_rama = self._color_rama(nodo.rama)
+            radio = self._radio(nodo)
+            if estado == "comprado":
+                pygame.draw.circle(superficie.raw, color_rama, (px, py), radio)
+                pygame.draw.circle(superficie.raw, COLOR_TEXTO, (px, py), radio, 2)
+            elif estado == "disponible":
+                glow_r = int(radio * 2)
+                glow = pygame.Surface((glow_r * 2, glow_r * 2), pygame.SRCALPHA)
+                alpha = int(60 + 110 * parpadeo)
+                pygame.draw.circle(glow, (*color_rama, alpha), (glow_r, glow_r),
+                                   int(radio * 1.7))
+                superficie.blit(glow, (px - glow_r, py - glow_r))
+                pygame.draw.circle(superficie.raw, (24, 24, 30), (px, py), radio)
+                pygame.draw.circle(superficie.raw, color_rama, (px, py), radio, 2)
+            else:
+                pygame.draw.circle(superficie.raw, COLOR_NODO_BLOQUEADO, (px, py), radio)
+                pygame.draw.circle(superficie.raw, (92, 92, 98), (px, py), radio, 1)
+
+            rect = pygame.Rect(0, 0, radio * 2 + 10, radio * 2 + 10)
+            rect.center = (px, py)
+            self._rects[nodo.id] = rect
+            if self.sel == nodo.id:
+                pygame.draw.circle(superficie.raw, COLOR_ORO, (px, py), radio + 5, 2)
+
+        self._panel_lateral(superficie, economia, arbol)
+
+        if self.mensaje:
+            img = self.fuente_chica.render(self.mensaje, True, self.color_mensaje)
+            superficie.blit(img, ((ancho_libre - img.get_width()) // 2,
+                                  ALTO_VENTANA - 56))
+        pie = self.fuente_chica.render(
+            "Mouse o flechas + ENTER investigar  ·  T — habilidades"
+            "  ·  R/ESC cerrar",
+            True, COLOR_TEXTO_SUAVE)
+        superficie.blit(pie, ((ancho_libre - pie.get_width()) // 2, ALTO_VENTANA - 28))
+
+    def _panel_lateral(self, superficie, economia, arbol):
+        x = ANCHO_VENTANA - self.ANCHO_PANEL - 10
+        superficie.blit(_panel(self.ANCHO_PANEL, ALTO_VENTANA - 20, alpha=225),
+                        (x, 10))
+        nodo = NODOS[self.sel]
+        color_rama = self._color_rama(nodo.rama)
+        nombre = self.fuente.render(nodo.nombre, True, color_rama)
+        superficie.blit(nombre, (x + 16, 26))
+
+        estado = arbol.estado(nodo.id)
+        etiqueta = {"comprado": "✓ Investigado", "disponible": "Disponible",
+                    "bloqueado": "Bloqueado"}[estado]
+        color_etq = {"comprado": COLOR_DINERO, "disponible": COLOR_TEXTO,
+                     "bloqueado": COLOR_ERROR}[estado]
+        superficie.blit(self.fuente_chica.render(etiqueta, True, color_etq),
+                        (x + 16, 62))
+        if estado != "comprado":
+            superficie.blit(self.fuente_chica.render(
+                f"Coste: {nodo.coste} XP", True, COLOR_ORO), (x + 16, 86))
+
+        y = 122
+        for linea in _envolver_lineas(self.fuente_desc, nodo.desc,
+                                      self.ANCHO_PANEL - 32):
+            superficie.blit(self.fuente_desc.render(linea, True, COLOR_TEXTO),
+                            (x + 16, y))
+            y += 23
+
+        if nodo.desbloquea:
+            datos = PRODUCTOS[nodo.desbloquea]
+            y += 10
+            superficie.blit(self.fuente_chica.render(
+                f"Vende a ${datos['precio']} c/u", True, COLOR_DINERO), (x + 16, y))
+            y += 22
+            superficie.blit(self.fuente_chica.render(
+                f"+{datos['xp_venta']} XP por venta", True, COLOR_TEXTO_SUAVE),
+                (x + 16, y))
+            y += 22
+
+        if estado == "bloqueado" and nodo.padres:
+            faltan = [NODOS[p].nombre for p in nodo.padres
+                     if p not in arbol.comprados]
+            y += 10
+            superficie.blit(self.fuente_chica.render(
+                "Requiere:", True, COLOR_ERROR), (x + 16, y))
+            y += 22
+            for nombre_falta in faltan:
+                superficie.blit(self.fuente_desc.render(
+                    f"· {nombre_falta}", True, COLOR_TEXTO_SUAVE), (x + 16, y))
+                y += 22
 
 
 # ---------------------------------------------------------

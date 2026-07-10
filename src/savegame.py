@@ -26,6 +26,7 @@ from .economy import Caja, Trato, RedVentas, PEDIDOS
 from .events import GestorEventos, PedidoVIP
 from .inventory import Inventario
 from .crafting import Sotano
+from .skilltree import SkillTree, AppSalesManager
 
 RUTA_CARPETA = Path(__file__).resolve().parent.parent / "partidas"
 MAX_PARTIDAS = 5
@@ -104,6 +105,8 @@ def guardar(juego):
         "inventario": juego.economia.inventario.a_dict(),
         "sotano": juego.sotano.a_dict(),
         "habilidades": sorted(juego.habilidades.compradas),
+        "arbol_meds": juego.arbol_meds.a_dict(),
+        "app_ventas": juego.app_ventas.a_dict(),
         "jugador": {
             "pos": [juego.jugador.rect.x, juego.jugador.rect.y],
             "vida": juego.jugador.vida,
@@ -171,6 +174,13 @@ def aplicar(juego, datos):
     juego.sotano = Sotano.desde_dict(datos.get("sotano"))
 
     juego.habilidades.compradas = set(datos.get("habilidades", []))
+    juego.arbol_meds = SkillTree.desde_dict(datos.get("arbol_meds"))
+    juego.app_ventas = AppSalesManager.desde_dict(datos.get("app_ventas"))
+    if "arbol_meds" not in datos and economia.meds_desbloqueados:
+        # Partida de antes del árbol de I+D: ya sabía craftear los
+        # tiers 1 (naturales y químicos) — se le otorgan gratis para
+        # que no quede sin poder vender lo que ya tenía desbloqueado
+        juego.arbol_meds.comprados.update(("nat_t1", "quim_t1"))
     juego.jugador.vida_max = juego.habilidades.vida_max()
     juego.jugador.vida = min(datos["jugador"]["vida"], juego.jugador.vida_max)
 
