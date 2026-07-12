@@ -239,6 +239,9 @@ class Juego:
         self.proveedor = None          # el NPC, cuando viene de visita
         self.proveedor_visito = False  # ya apareció alguna vez
         self.proveedor_motivo = "intro"  # o "mision"
+        # Reintento de la visita de intro: si se pierde (guardar y
+        # cargar, morir, no verlo), vuelve hasta que la charla ocurra
+        self.timer_proveedor_intro = 0.0
 
         # Misiones del Proveedor
         self.mision = None             # la activa (dict) o None
@@ -1855,14 +1858,22 @@ class Juego:
         self._actualizar_pedidos(dt)
 
         # Cuando el local factura lo suficiente, el Proveedor viene
-        # en persona a esperarte a la puerta (hablarle con E)
-        if (not self.proveedor_visito
+        # en persona a esperarte a la puerta (hablarle con E). La
+        # visita se REINTENTA mientras no hayas tenido la charla:
+        # antes, si se perdía (guardar/cargar borra al NPC, morir,
+        # no verlo a tiempo), quedabas trabado sin negocio ilegal.
+        if (not self.economia.meds_desbloqueados
+                and self.proveedor is None
                 and self.economia.total_comida >= UMBRAL_DESBLOQUEO_MEDS):
-            self.proveedor_visito = True
-            self.proveedor = Proveedor(8.5 * TILE, 9.4 * TILE)
-            self.proveedor_motivo = "intro"
-            self._texto_sobre_jugador(
-                "Hay alguien esperándote en la puerta del local…", COLOR_PUNTO)
+            self.timer_proveedor_intro -= dt
+            if self.timer_proveedor_intro <= 0:
+                self.timer_proveedor_intro = 30.0   # próximo reintento
+                self.proveedor_visito = True
+                self.proveedor = Proveedor(8.5 * TILE, 9.4 * TILE)
+                self.proveedor_motivo = "intro"
+                self._texto_sobre_jugador(
+                    "Hay alguien esperándote en la puerta del local…",
+                    COLOR_PUNTO)
         if self.proveedor is not None:
             self.proveedor.actualizar(dt)
             # Si vino a ofrecer un trabajo y lo ignorás, se cansa
