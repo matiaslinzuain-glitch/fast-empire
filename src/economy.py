@@ -93,9 +93,9 @@ PORCENTAJE_MULTA = 0.25          # arresto: 25% del dinero + meds confiscados
 PORCENTAJE_PERDIDA_MUERTE = 0.40 # muerte: 40% del dinero + meds perdidos
 
 # --- Puntos de habilidad (el árbol llega en la Fase 5) ---
-PUNTOS_POR_VENTA = 1
-PUNTOS_POR_RIVAL = 5
-PUNTOS_POR_ESCAPE = 2
+PUNTOS_POR_VENTA = 0   # las ventas de comida ya no dan XP: hay que vender meds
+PUNTOS_POR_RIVAL = 3   # era 5
+PUNTOS_POR_ESCAPE = 1  # era 2
 
 # A partir de cuánto facturado en negro los rivales te atacan
 UMBRAL_AMENAZA_RIVALES = 150
@@ -227,10 +227,13 @@ class Economia:
         """True cuando los rivales ya te conocen y te atacan."""
         return self.total_ilegal >= UMBRAL_AMENAZA_RIVALES
 
-    def _confiscar_meds(self):
-        """Se pierde TODO medicamento encima, de cualquier tier."""
+    def _confiscar_meds(self, conservar_naturales=False):
+        """Se pierde TODO medicamento encima, de cualquier tier.
+        Con Aceite Esencial (skilltree) los naturales sobreviven."""
         confiscados = 0
         for pid in PRODUCTOS:
+            if conservar_naturales and PRODUCTOS[pid]["rama"] == "natural":
+                continue
             confiscados += self.inventario.cantidad(pid)
             self.inventario.fijar(pid, 0)
         return confiscados
@@ -242,12 +245,14 @@ class Economia:
         self.dinero -= multa
         return multa, self._confiscar_meds()
 
-    def muerte(self):
-        """Se pierde parte del dinero y los medicamentos que llevabas.
+    def muerte(self, arbol=None):
+        """Se pierde parte del dinero y los medicamentos que llevabas
+        (los naturales se salvan con Aceite Esencial).
         Devuelve (dinero perdido, meds perdidos)."""
         perdido = round(self.dinero * PORCENTAJE_PERDIDA_MUERTE)
         self.dinero -= perdido
-        return perdido, self._confiscar_meds()
+        conservar = arbol is not None and arbol.conserva_naturales()
+        return perdido, self._confiscar_meds(conservar)
 
 
 class Produccion:

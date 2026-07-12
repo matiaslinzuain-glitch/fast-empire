@@ -33,8 +33,8 @@
 # =========================================================
 
 # --- Curva de coste (el rebalanceo vive en estas dos líneas) ---
-COSTE_BASE = 100          # XP del primer nodo de cada tronco
-MULT_EXPONENCIAL = 2.5    # crecimiento por nivel de profundidad
+COSTE_BASE = 150          # XP del primer nodo: prof1=150, prof2=450, prof3=1350
+MULT_EXPONENCIAL = 3.0    # crecimiento agresivo por nivel de profundidad
 
 
 def coste_nodo(profundidad):
@@ -50,27 +50,27 @@ def coste_nodo(profundidad):
 PRODUCTOS = {
     "med_nat": {
         "nombre": "Tintura de Hierbas", "plural": "naturales",
-        "rama": "natural", "tier": 1, "precio": 55, "xp_venta": 5,
+        "rama": "natural", "tier": 1, "precio": 55, "xp_venta": 3,
     },
     "med_nat2": {
         "nombre": "Extracto Botánico", "plural": "extractos botánicos",
-        "rama": "natural", "tier": 2, "precio": 150, "xp_venta": 14,
+        "rama": "natural", "tier": 2, "precio": 150, "xp_venta": 8,
     },
     "med_nat3": {
         "nombre": "Panacea Orgánica", "plural": "panaceas",
-        "rama": "natural", "tier": 3, "precio": 420, "xp_venta": 40,
+        "rama": "natural", "tier": 3, "precio": 420, "xp_venta": 24,
     },
     "med_quim": {
         "nombre": "Analgésico Sintético", "plural": "químicos",
-        "rama": "sintetico", "tier": 1, "precio": 95, "xp_venta": 9,
+        "rama": "sintetico", "tier": 1, "precio": 95, "xp_venta": 5,
     },
     "med_quim2": {
         "nombre": "Antiviral Complejo", "plural": "antivirales",
-        "rama": "sintetico", "tier": 2, "precio": 260, "xp_venta": 24,
+        "rama": "sintetico", "tier": 2, "precio": 260, "xp_venta": 14,
     },
     "med_quim3": {
         "nombre": "Suero Experimental", "plural": "sueros",
-        "rama": "sintetico", "tier": 3, "precio": 700, "xp_venta": 65,
+        "rama": "sintetico", "tier": 3, "precio": 700, "xp_venta": 38,
     },
 }
 
@@ -125,6 +125,12 @@ NODOS = {n.id: n for n in [
         "natural", "rama_corta", 2, (-230, 110),
         padres=("nat_t1",)),
     SkillNode(
+        "nat_a3", "Fertilizante Clandestino",
+        "Mezcla casera de nutrientes: la maceta produce su "
+        "planta un 30% más rápido.",
+        "natural", "rama_corta", 2, (-100, 130),
+        padres=("nat_t1",)),
+    SkillNode(
         "nat_t2", "Extracto Botánico Purificado",
         "Desbloquea el medicamento natural Tier 2: el Extracto "
         "Botánico. Se paga casi el triple que la tintura.",
@@ -137,11 +143,23 @@ NODOS = {n.id: n for n in [
         "natural", "rama_corta", 3, (-430, 20),
         padres=("nat_t2",)),
     SkillNode(
+        "nat_a4", "Mezcla Doble",
+        "Manos de laboratorista: 25% de probabilidad de que "
+        "un crafteo natural produzca 2 unidades en vez de 1.",
+        "natural", "rama_corta", 3, (-290, 90),
+        padres=("nat_t2",)),
+    SkillNode(
         "nat_t3", "Panacea Orgánica",
         "Desbloquea el medicamento natural Tier 3: la Panacea. "
         "La joya verde del catálogo.",
         "natural", "tronco", 3, (-450, -170),
         padres=("nat_t2",), desbloquea="med_nat3"),
+    SkillNode(
+        "nat_a5", "Aceite Esencial",
+        "Conserva perfecta: si morís, los medicamentos "
+        "naturales que llevás encima NO se pierden.",
+        "natural", "rama_corta", 4, (-580, -100),
+        padres=("nat_t3",)),
 
     # ── Rama B: medicamentos sintéticos ─────────────────────
     SkillNode(
@@ -157,6 +175,12 @@ NODOS = {n.id: n for n in [
         "sintetico", "rama_corta", 2, (230, 110),
         padres=("quim_t1",)),
     SkillNode(
+        "quim_b4", "Solvente Premium",
+        "Pureza de exportación: los medicamentos sintéticos "
+        "se venden un 20% más caros en los tratos.",
+        "sintetico", "rama_corta", 2, (100, 130),
+        padres=("quim_t1",)),
+    SkillNode(
         "quim_t2", "Antiviral Complejo",
         "Desbloquea el medicamento químico Tier 2: el Antiviral. "
         "Química seria, plata seria.",
@@ -169,11 +193,40 @@ NODOS = {n.id: n for n in [
         "sintetico", "rama_corta", 3, (430, 20),
         padres=("quim_t2",)),
     SkillNode(
+        "quim_b3", "Cristalización Fina",
+        "Cristales perfectos: 20% de probabilidad de que un "
+        "crafteo sintético produzca una unidad extra.",
+        "sintetico", "rama_corta", 3, (290, 90),
+        padres=("quim_t2",)),
+    SkillNode(
         "quim_t3", "Suero Sintético Experimental",
         "Desbloquea el medicamento químico Tier 3: el Suero. "
         "Lo más caro y difícil de fabricar del juego.",
         "sintetico", "tronco", 3, (450, -170),
         padres=("quim_t2",), desbloquea="med_quim3"),
+    SkillNode(
+        "quim_b5", "Estabilizador Térmico",
+        "Reacción bajo control: el laboratorio nunca arruina "
+        "una cocinada (sin esta mejora, 15% de las tandas "
+        "fallan y se pierde el insumo).",
+        "sintetico", "rama_corta", 4, (580, -100),
+        padres=("quim_t3",)),
+
+    # ── Transversales: piden avance en LAS DOS ramas ────────
+    SkillNode(
+        "cx_t1", "Laboratorio Doble Faz",
+        "Reconversión total del sótano: el laboratorio también "
+        "procesa plantas en medicamento natural (sin gastar "
+        "ziploc).",
+        "mixta", "rama_corta", 4, (0, -200),
+        padres=("nat_t2", "quim_t2")),
+    SkillNode(
+        "cx_t2", "Red de Distribución",
+        "Logística de imperio: los vendedores de la Red cobran "
+        "15% de comisión (en vez de 25%) y venden un 30% más "
+        "seguido.",
+        "mixta", "rama_corta", 5, (0, -330),
+        padres=("nat_t3", "quim_t3")),
 ]}
 
 # Orden estable para listados (app Ventas, hover, catálogos):
@@ -248,16 +301,54 @@ class SkillTree:
         return 0.0
 
     def mult_precio(self, producto):
-        """Empaque Ecológico: +15% en venta directa de nat T1/T2."""
+        """Empaque Ecológico: +15% en venta de nat T1/T2.
+        Solvente Premium: +20% en venta de sintéticos."""
         datos = PRODUCTOS[producto]
         if (self.tiene("nat_a2") and datos["rama"] == "natural"
                 and datos["tier"] <= 2):
             return 1.15
+        if self.tiene("quim_b4") and datos["rama"] == "sintetico":
+            return 1.20
         return 1.0
 
     def mult_tiempo_lab(self):
         """Termodinámica: el laboratorio tarda un 40% menos."""
         return 0.6 if self.tiene("quim_b1") else 1.0
+
+    def mult_tiempo_maceta(self):
+        """Fertilizante Clandestino: la maceta rinde 30% más rápido."""
+        return 0.7 if self.tiene("nat_a3") else 1.0
+
+    def prob_unidad_extra(self, producto):
+        """Mezcla Doble (naturales) / Cristalización Fina (sintéticos):
+        probabilidad de que un crafteo produzca una unidad de más."""
+        rama = PRODUCTOS[producto]["rama"]
+        if rama == "natural" and self.tiene("nat_a4"):
+            return 0.25
+        if rama == "sintetico" and self.tiene("quim_b3"):
+            return 0.20
+        return 0.0
+
+    def conserva_naturales(self):
+        """Aceite Esencial: los naturales sobreviven a la muerte."""
+        return self.tiene("nat_a5")
+
+    def prob_fallo_lab(self):
+        """Sin Estabilizador Térmico, el 15% de las cocinadas del
+        laboratorio fallan (se pierde el insumo, no sale nada)."""
+        return 0.0 if self.tiene("quim_b5") else 0.15
+
+    def lab_acepta_naturales(self):
+        """Laboratorio Doble Faz: el lab también procesa plantas."""
+        return self.tiene("cx_t1")
+
+    def mult_comision_red(self):
+        """Red de Distribución: comisión 25% → 15%."""
+        return 0.6 if self.tiene("cx_t2") else 1.0
+
+    def mult_intervalo_red(self):
+        """Red de Distribución: los vendedores venden 30% más seguido."""
+        return 0.7 if self.tiene("cx_t2") else 1.0
 
     # ── guardado ─────────────────────────────────────────────
     def a_dict(self):

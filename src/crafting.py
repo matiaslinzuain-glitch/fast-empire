@@ -59,6 +59,13 @@ class Sotano:
         # True si el ÚLTIMO crafteo salió gratis (Cultivo Abundante /
         # Purificador de Mermas): main lo lee para el cartelito
         self.ultimo_sin_insumos = False
+        # True si el último crafteo produjo unidad extra (Mezcla
+        # Doble / Cristalización Fina)
+        self.ultimo_doble = False
+        # Qué está cocinando el lab ("med_quim" o "med_nat" con
+        # Doble Faz) y si la tanda va a salir fallada
+        self.lab_producto = "med_quim"
+        self.lab_fallo = False
 
     # -- helper genérico de crafteo (verifica, resta y suma) --
     @staticmethod
@@ -85,10 +92,11 @@ class Sotano:
         return arbol.desbloqueado(producto)
 
     # -- maceta: semillas → (tiempo) → planta --
-    def plantar(self, inventario):
+    def plantar(self, inventario, arbol=None):
         if self.maceta is not None or not inventario.quitar("semillas"):
             return False
-        self.maceta = SEGUNDOS_PLANTA
+        mult = arbol.mult_tiempo_maceta() if arbol else 1.0
+        self.maceta = SEGUNDOS_PLANTA * mult
         return True
 
     def cosechar_maceta(self, inventario):
@@ -118,6 +126,7 @@ class Sotano:
         pueden perdonar los insumos (queda en `ultimo_sin_insumos`).
         Devuelve el id del producto armado o None."""
         self.ultimo_sin_insumos = False
+        self.ultimo_doble = False
         for prod, receta in RECETAS_MESA:
             if producto is not None and prod != producto:
                 continue
@@ -125,9 +134,13 @@ class Sotano:
                 continue
             gratis = (arbol is not None and
                       random.random() < arbol.prob_insumos_gratis(prod))
+            doble = (arbol is not None and
+                     random.random() < arbol.prob_unidad_extra(prod))
             if self.craftear(inventario, receta, prod,
+                             cantidad=2 if doble else 1,
                              consumir=not gratis):
                 self.ultimo_sin_insumos = gratis
+                self.ultimo_doble = doble
                 return prod
         return None
 
@@ -136,31 +149,52 @@ class Sotano:
         return self.armar_en_mesa(inventario, "med_nat", arbol) == "med_nat"
 
     # -- laboratorio: compuestos → (tiempo) → med químico --
+    # (con Doble Faz también: planta → med natural, sin ziploc)
     def iniciar_laboratorio(self, inventario, arbol=None):
         """Arranca una cocinada (si el árbol ya enseñó químicos).
         Termodinámica acelera el fuego; el Purificador puede
-        perdonar el compuesto."""
+        perdonar el compuesto. Sin Estabilizador Térmico hay un
+        riesgo de que la tanda salga fallada."""
         if self.laboratorio is not None:
             return False
-        if not self._permitido("med_quim", arbol):
-            return False
-        if not inventario.tiene("compuestos"):
+        producto = None
+        if (self._permitido("med_quim", arbol)
+                and inventario.tiene("compuestos")):
+            producto, insumo = "med_quim", "compuestos"
+        elif (arbol is not None and arbol.lab_acepta_naturales()
+                and inventario.tiene("planta")):
+            producto, insumo = "med_nat", "planta"
+        if producto is None:
             return False
         gratis = (arbol is not None and
-                  random.random() < arbol.prob_insumos_gratis("med_quim"))
+                  random.random() < arbol.prob_insumos_gratis(producto))
         if not gratis:
-            inventario.quitar("compuestos")
+            inventario.quitar(insumo)
         self.ultimo_sin_insumos = gratis
+        self.lab_producto = producto
+        self.lab_fallo = (arbol is not None and
+                          random.random() < arbol.prob_fallo_lab())
         mult = arbol.mult_tiempo_lab() if arbol else 1.0
         self.laboratorio = SEGUNDOS_LABORATORIO * mult
         return True
 
-    def cosechar_laboratorio(self, inventario):
+    def cosechar_laboratorio(self, inventario, arbol=None):
+        """Devuelve None si no había nada listo, "fallo" si la
+        tanda salió mal, o el id del producto cosechado."""
         if self.laboratorio != LISTA:
-            return False
-        inventario.agregar("med_quim")
+            return None
         self.laboratorio = None
-        return True
+        if self.lab_fallo:
+            self.lab_fallo = False
+            return "fallo"
+        producto = self.lab_producto or "med_quim"
+        cantidad = 1
+        if (arbol is not None and
+                random.random() < arbol.prob_unidad_extra(producto)):
+            cantidad = 2
+        self.ultimo_doble = cantidad == 2
+        inventario.agregar(producto, cantidad)
+        return producto
 
     # -- estante: guardar / retirar de a uno --
     def guardar(self, inventario, id_item, cantidad=1):
@@ -197,6 +231,8 @@ class Sotano:
             return "lista" if valor == LISTA else valor
         return {"maceta": timer(self.maceta),
                 "laboratorio": timer(self.laboratorio),
+                "lab_producto": self.lab_producto,
+                "lab_fallo": self.lab_fallo,
                 "estante": self.estante.a_dict()}
 
     @classmethod
@@ -209,5 +245,7 @@ class Sotano:
             return LISTA if valor == "lista" else valor
         sotano.maceta = timer(datos.get("maceta"))
         sotano.laboratorio = timer(datos.get("laboratorio"))
+        sotano.lab_producto = datos.get("lab_producto", "med_quim")
+        sotano.lab_fallo = datos.get("lab_fallo", False)
         sotano.estante = Inventario.desde_dict(datos.get("estante"))
         return sotano
