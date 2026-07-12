@@ -2188,20 +2188,70 @@ class PantallaCocina(_MenuVertical):
 
 
 # ---------------------------------------------------------
-# Árbol de habilidades (tecla T)
+# Árbol de habilidades (tecla T): estilo hexagonal inspirado
+# en Spider-Man Miles Morales. Cuatro ramas en abanico que
+# nacen del centro (cocina arriba-izq, ventas arriba-der,
+# combate abajo-izq, sigilo abajo-der), nodos hexagonales
+# con glow y panel lateral con el detalle del seleccionado.
 # ---------------------------------------------------------
+def _hex_pts_en(cx, cy, r):
+    """Hexágono pointy-top centrado en (cx, cy)."""
+    pts = []
+    for i in range(6):
+        a = math.radians(30 + 60 * i)
+        pts.append((cx + r * math.cos(a), cy - r * math.sin(a)))
+    return pts
+
+
+def _glow_hex_en(superficie, cx, cy, r, color, alpha):
+    """Halo hexagonal semitransparente."""
+    sz = int(r * 3 + 6)
+    s = pygame.Surface((sz, sz), pygame.SRCALPHA)
+    c2 = sz // 2
+    pts = []
+    for i in range(6):
+        a = math.radians(30 + 60 * i)
+        pts.append((c2 + r * math.cos(a), c2 - r * math.sin(a)))
+    pygame.draw.polygon(s, (*color, alpha), pts)
+    superficie.blit(s, (cx - c2, cy - c2))
+
+
 class PantallaHabilidades:
-    """Grilla de 4 ramas x 3 nodos. Se navega con WASD/flechas o
-    directamente con el mouse; E/Enter o click compran."""
+    """El árbol clásico (4 ramas x 4 nodos) con la estética
+    hexagonal de Miles Morales. WASD/flechas navegan, E/Enter
+    o click compran; el panel derecho detalla el nodo."""
+
+    CENTRO = (345, 285)
+    RADIO_HEX = 19
+    ANCHO_PANEL = 250
+
+    _C_BG       = (6,   8,  16)
+    _C_HEX_GRID = (18,  22,  36)
+    _C_LOCKED   = (42,  45,  58)
+    _C_LOCK_BRD = (72,  76,  92)
+
+    # Dirección de cada rama (unitaria aprox.): en abanico
+    _DIRS = [(-0.94, -0.55), (0.94, -0.55),   # cocina / ventas
+             (-0.94,  0.62), (0.94,  0.62)]   # combate / sigilo
 
     def __init__(self):
-        self.fuente_titulo = FuenteUI(56)
-        self.fuente = FuenteUI(26)
-        self.fuente_chica = FuenteUI(21)
+        self.fuente_titulo = FuenteUI(38)
+        self.fuente       = FuenteUI(24)
+        self.fuente_chica = FuenteUI(19)
+        self.fuente_desc  = FuenteUI(17)
+        self.fuente_mini  = FuenteUI(15)
         self.sel = [0, 0]          # [rama, nivel]
         self.mensaje = ""
         self.color_mensaje = COLOR_TEXTO
         self._cajas = {}           # (rama, nivel) -> rect clickeable
+        # Posiciones precalculadas de cada nodo
+        cx, cy = self.CENTRO
+        self._pos = {}
+        for rama, (dx, dy) in enumerate(self._DIRS):
+            for nivel in range(4):
+                d = 78 + nivel * 72
+                self._pos[(rama, nivel)] = (round(cx + dx * d),
+                                            round(cy + dy * d))
 
     def abrir(self):
         self.mensaje = ""
@@ -2210,14 +2260,15 @@ class PantallaHabilidades:
         if evento.type == pygame.KEYDOWN:
             if evento.key in (pygame.K_ESCAPE, pygame.K_t):
                 return "cerrar"
+            n = len(ARBOL[self.sel[0]]["nodos"])
             if evento.key in (pygame.K_a, pygame.K_LEFT):
                 self.sel[0] = (self.sel[0] - 1) % len(ARBOL)
             elif evento.key in (pygame.K_d, pygame.K_RIGHT):
                 self.sel[0] = (self.sel[0] + 1) % len(ARBOL)
             elif evento.key in (pygame.K_w, pygame.K_UP):
-                self.sel[1] = (self.sel[1] - 1) % 3
+                self.sel[1] = (self.sel[1] - 1) % n
             elif evento.key in (pygame.K_s, pygame.K_DOWN):
-                self.sel[1] = (self.sel[1] + 1) % 3
+                self.sel[1] = (self.sel[1] + 1) % n
             elif evento.key in (pygame.K_RETURN, pygame.K_e, pygame.K_SPACE):
                 self._comprar(economia, habilidades, jugador)
         elif evento.type == pygame.MOUSEMOTION:
@@ -2236,71 +2287,208 @@ class PantallaHabilidades:
         ok, mensaje = habilidades.comprar(rama, nivel, economia)
         self.mensaje = mensaje
         self.color_mensaje = COLOR_DINERO if ok else COLOR_ERROR
-        if ok and ARBOL[rama]["nodos"][nivel]["id"] == "aguante":
+        id_nodo = ARBOL[rama]["nodos"][nivel]["id"]
+        if ok and id_nodo in ("aguante", "piel"):
             # Aplicar la vida extra al toque
+            cura = 40 if id_nodo == "aguante" else 60
             jugador.vida_max = habilidades.vida_max()
-            jugador.vida = min(jugador.vida_max, jugador.vida + 40)
+            jugador.vida = min(jugador.vida_max, jugador.vida + cura)
+
+    # -- dibujo --
+
+    def _fondo_hex(self, superficie, ancho):
+        r = 22
+        h = r * math.sqrt(3)
+        for col in range(int(ancho / (r * 1.5)) + 3):
+            for fila in range(int(ALTO_VENTANA / h) + 3):
+                ox = col * r * 1.5
+                oy = fila * h + (h / 2 if col % 2 else 0) - h
+                pygame.draw.polygon(superficie.raw, self._C_HEX_GRID,
+                                    _hex_pts_en(ox, oy, r - 1), 1)
 
     def dibujar(self, superficie, economia, habilidades):
-        velo = _panel(ANCHO_VENTANA, ALTO_VENTANA, alpha=185)
-        superficie.blit(velo, (0, 0))
+        ancho_libre = ANCHO_VENTANA - self.ANCHO_PANEL - 20
+
+        pygame.draw.rect(superficie.raw, self._C_BG,
+                         (0, 0, ancho_libre, ALTO_VENTANA))
+        self._fondo_hex(superficie, ancho_libre)
+        pygame.draw.line(superficie.raw, (38, 42, 60),
+                         (ancho_libre, 0), (ancho_libre, ALTO_VENTANA), 1)
+
+        self._panel_lateral(superficie, economia, habilidades)
+
+        # Barra superior
+        barra = pygame.Surface((ancho_libre, 50), pygame.SRCALPHA)
+        barra.fill((8, 10, 20, 225))
+        superficie.blit(barra, (0, 0))
         titulo = self.fuente_titulo.render("HABILIDADES", True, COLOR_ORO)
-        superficie.blit(titulo, ((ANCHO_VENTANA - titulo.get_width()) // 2, 26))
-        recursos = self.fuente.render(
-            f"Puntos: {economia.puntos}   ·   $ {economia.dinero}",
-            True, COLOR_TEXTO)
-        superficie.blit(recursos, ((ANCHO_VENTANA - recursos.get_width()) // 2, 72))
+        superficie.blit(titulo,
+                        (ancho_libre // 2 - titulo.get_width() // 2, 12))
+        pts_img = self.fuente.render(
+            f"Puntos: {economia.puntos}", True, COLOR_TEXTO)
+        superficie.blit(pts_img, (14, 16))
+        plata_img = self.fuente_chica.render(
+            f"$ {economia.dinero}", True, COLOR_DINERO)
+        superficie.blit(plata_img,
+                        (ancho_libre - plata_img.get_width() - 14, 18))
 
-        self._cajas = {}
-        ancho_caja, alto_caja = 180, 86
-        margen_x = (ANCHO_VENTANA - 4 * ancho_caja - 3 * 12) // 2
+        cx, cy = self.CENTRO
+        t = pygame.time.get_ticks() / 1000.0
+        parpadeo = 0.5 + 0.5 * math.sin(t * 2.8)
+
+        # Etiquetas de rama en la punta de cada abanico
         for rama, datos in enumerate(ARBOL):
-            x = margen_x + rama * (ancho_caja + 12)
-            encabezado = self.fuente.render(datos["nombre"], True, datos["color"])
-            superficie.blit(encabezado, (x + (ancho_caja - encabezado.get_width()) // 2, 104))
+            px, py = self._pos[(rama, 3)]
+            dx, dy = self._DIRS[rama]
+            lbl = self.fuente_mini.render(datos["nombre"], True,
+                                          datos["color"])
+            lx = px + dx * 34 - lbl.get_width() // 2
+            ly = py + dy * 34 - lbl.get_height() // 2
+            lx = max(6, min(lx, ancho_libre - lbl.get_width() - 6))
+            superficie.blit(lbl, (lx, ly))
+
+        # Líneas centro → nodo1 → ... → nodo4
+        for rama, datos in enumerate(ARBOL):
+            color = datos["color"]
+            previo = (cx, cy)
+            for nivel in range(len(datos["nodos"])):
+                px, py = self._pos[(rama, nivel)]
+                activa = habilidades.estado(rama, nivel) == "comprada"
+                if activa:
+                    s = pygame.Surface((ANCHO_VENTANA, ALTO_VENTANA),
+                                       pygame.SRCALPHA)
+                    pygame.draw.line(s, (*color, 30), previo, (px, py), 8)
+                    superficie.blit(s, (0, 0))
+                    pygame.draw.line(superficie.raw, color,
+                                     previo, (px, py), 3)
+                else:
+                    pygame.draw.line(superficie.raw, (50, 54, 72),
+                                     previo, (px, py), 1)
+                previo = (px, py)
+
+        # Nodo central
+        pygame.draw.circle(superficie.raw, (30, 32, 48), (cx, cy), 13)
+        pygame.draw.circle(superficie.raw, COLOR_ORO, (cx, cy), 13, 2)
+        plus = self.fuente_chica.render("+", True, COLOR_ORO)
+        superficie.blit(plus, (cx - plus.get_width() // 2,
+                               cy - plus.get_height() // 2))
+
+        # Nodos hexagonales
+        self._cajas = {}
+        r = self.RADIO_HEX
+        for rama, datos in enumerate(ARBOL):
+            color = datos["color"]
+            dim = tuple(max(0, c // 3) for c in color)
             for nivel, nodo in enumerate(datos["nodos"]):
-                y = 132 + nivel * (alto_caja + 10)
-                rect = pygame.Rect(x, y, ancho_caja, alto_caja)
-                self._cajas[(rama, nivel)] = rect
+                px, py = self._pos[(rama, nivel)]
                 estado = habilidades.estado(rama, nivel)
-                elegida = [rama, nivel] == self.sel
+                pts = _hex_pts_en(px, py, r)
 
                 if estado == "comprada":
-                    fondo, borde = (38, 34, 22, 235), datos["color"]
+                    _glow_hex_en(superficie, px, py, r + 5, color, 45)
+                    pygame.draw.polygon(superficie.raw, dim, pts)
+                    pygame.draw.polygon(superficie.raw, color, pts, 3)
+                    ok_img = self.fuente.render("✓", True, color)
+                    superficie.blit(ok_img, (px - ok_img.get_width() // 2,
+                                             py - ok_img.get_height() // 2))
                 elif estado == "disponible":
-                    fondo, borde = (22, 22, 28, 235), COLOR_TEXTO_SUAVE
+                    ag = int(45 + 85 * parpadeo)
+                    _glow_hex_en(superficie, px, py, r + 8, color, ag)
+                    pygame.draw.polygon(superficie.raw, (12, 14, 24), pts)
+                    pygame.draw.polygon(superficie.raw, color, pts, 2)
+                    c_img = self.fuente_mini.render(
+                        str(nodo["puntos"]), True, color)
+                    superficie.blit(c_img, (px - c_img.get_width() // 2,
+                                            py - c_img.get_height() // 2))
                 else:
-                    fondo, borde = (14, 14, 16, 235), (60, 60, 64)
-                caja = pygame.Surface(rect.size, pygame.SRCALPHA)
-                caja.fill(fondo)
-                superficie.blit(caja, rect)
-                pygame.draw.rect(superficie.raw, COLOR_ORO if elegida else borde,
-                                 rect, 2 if elegida else 1)
+                    pygame.draw.polygon(superficie.raw, self._C_LOCKED, pts)
+                    pygame.draw.polygon(superficie.raw, self._C_LOCK_BRD,
+                                        pts, 1)
+                    c_lk = (95, 100, 118)
+                    pygame.draw.rect(superficie.raw, c_lk,
+                                     pygame.Rect(px - 4, py, 8, 6),
+                                     border_radius=1)
+                    pygame.draw.arc(superficie.raw, c_lk,
+                                    pygame.Rect(px - 3, py - 5, 7, 7),
+                                    0, math.pi, 2)
 
-                color_nombre = datos["color"] if estado != "bloqueada" else (110, 110, 114)
-                img = self.fuente_chica.render(nodo["nombre"], True, color_nombre)
-                superficie.blit(img, (rect.x + 8, rect.y + 8))
-                if estado == "comprada":
-                    detalle, color_det = "✓ comprada", datos["color"]
-                elif estado == "bloqueada":
-                    detalle, color_det = "bloqueada", (110, 110, 114)
-                else:
-                    detalle = f"{nodo['puntos']} pts + ${nodo['dinero']}"
-                    color_det = COLOR_TEXTO
-                img = self.fuente_chica.render(detalle, True, color_det)
-                superficie.blit(img, (rect.x + 8, rect.y + 32))
+                if self.sel == [rama, nivel]:
+                    pygame.draw.polygon(superficie.raw, COLOR_ORO,
+                                        _hex_pts_en(px, py, r + 6), 2)
 
-        # Descripción del nodo seleccionado + feedback
-        nodo = ARBOL[self.sel[0]]["nodos"][self.sel[1]]
-        desc = self.fuente.render(nodo["desc"], True, COLOR_TEXTO)
-        superficie.blit(desc, ((ANCHO_VENTANA - desc.get_width()) // 2, 448))
+                hit = pygame.Rect(0, 0, (r + 6) * 2, (r + 6) * 2)
+                hit.center = (px, py)
+                self._cajas[(rama, nivel)] = hit
+
         if self.mensaje:
-            img = self.fuente_chica.render(self.mensaje, True, self.color_mensaje)
-            superficie.blit(img, ((ANCHO_VENTANA - img.get_width()) // 2, 476))
-        pie = self.fuente_chica.render(
-            "Mouse o WASD + ENTER comprar  ·  R — árbol de medicamentos"
+            img = self.fuente_chica.render(self.mensaje, True,
+                                           self.color_mensaje)
+            superficie.blit(img, ((ancho_libre - img.get_width()) // 2,
+                                  ALTO_VENTANA - 52))
+        pie = self.fuente_mini.render(
+            "Mouse o WASD + ENTER comprar  ·  R — I+D medicamentos"
             "  ·  T/ESC cerrar", True, COLOR_TEXTO_SUAVE)
-        superficie.blit(pie, ((ANCHO_VENTANA - pie.get_width()) // 2, ALTO_VENTANA - 26))
+        superficie.blit(pie, ((ancho_libre - pie.get_width()) // 2,
+                              ALTO_VENTANA - 24))
+
+    def _panel_lateral(self, superficie, economia, habilidades):
+        x = ANCHO_VENTANA - self.ANCHO_PANEL - 10
+        panel_bg = pygame.Surface((self.ANCHO_PANEL, ALTO_VENTANA - 20),
+                                  pygame.SRCALPHA)
+        panel_bg.fill((10, 12, 22, 240))
+        superficie.blit(panel_bg, (x, 10))
+
+        rama, nivel = self.sel
+        datos = ARBOL[rama]
+        nodo = datos["nodos"][nivel]
+        color = datos["color"]
+        estado = habilidades.estado(rama, nivel)
+
+        barra_h = 50
+        barra = pygame.Surface((self.ANCHO_PANEL, barra_h), pygame.SRCALPHA)
+        barra.fill((*color, 45))
+        superficie.blit(barra, (x, 10))
+        pygame.draw.line(superficie.raw, color, (x, 10 + barra_h),
+                         (x + self.ANCHO_PANEL, 10 + barra_h), 1)
+        etq = self.fuente_mini.render(
+            f"{datos['nombre']}  ·  NIVEL {nivel + 1}", True, color)
+        superficie.blit(etq, (x + 12, 20))
+
+        y = 10 + barra_h + 14
+        for linea in _envolver_lineas(self.fuente, nodo["nombre"],
+                                      self.ANCHO_PANEL - 24):
+            img = self.fuente.render(linea, True, COLOR_TEXTO)
+            superficie.blit(img, (x + 12, y))
+            y += 26
+
+        etiqueta = {"comprada": "✓ Comprada", "disponible": "Disponible",
+                    "bloqueada": "Bloqueada"}[estado]
+        color_etq = {"comprada": COLOR_DINERO, "disponible": COLOR_TEXTO,
+                     "bloqueada": COLOR_ERROR}[estado]
+        superficie.blit(self.fuente_chica.render(etiqueta, True, color_etq),
+                        (x + 12, y + 4))
+        y += 30
+        if estado != "comprada":
+            superficie.blit(self.fuente_chica.render(
+                f"Coste: {nodo['puntos']} pts + ${nodo['dinero']}",
+                True, COLOR_ORO), (x + 12, y))
+            y += 26
+
+        y += 6
+        for linea in _envolver_lineas(self.fuente_desc, nodo["desc"],
+                                      self.ANCHO_PANEL - 24):
+            superficie.blit(self.fuente_desc.render(
+                linea, True, COLOR_TEXTO), (x + 12, y))
+            y += 22
+
+        if estado == "bloqueada":
+            y += 8
+            previo = datos["nodos"][nivel - 1]["nombre"]
+            superficie.blit(self.fuente_chica.render(
+                "Requiere:", True, COLOR_ERROR), (x + 12, y))
+            y += 22
+            superficie.blit(self.fuente_desc.render(
+                f"· {previo}", True, COLOR_TEXTO_SUAVE), (x + 12, y))
 
 
 # ---------------------------------------------------------
@@ -2315,8 +2503,8 @@ class PantallaArbolMedicamentos:
     """Árbol de I+D estilo Spider-Man Miles Morales: nodos
     hexagonales con glow, cuadrícula de fondo y panel lateral."""
 
-    CENTRO = (338, 300)
-    ESCALA = 0.62
+    CENTRO = (345, 300)
+    ESCALA = 0.52
     RADIO_TRONCO = 20
     RADIO_CORTA  = 15
     ANCHO_PANEL  = 250
@@ -2354,11 +2542,22 @@ class PantallaArbolMedicamentos:
         x, y = nodo.pos
         return cx + x * self.ESCALA, cy + y * self.ESCALA
 
+    _C_MIX     = (255, 200,  60)   # dorado (transversales)
+    _C_MIX_DIM = (95,  75,  20)
+
     def _c_rama(self, rama):
-        return self._C_NAT if rama == "natural" else self._C_QUIM
+        if rama == "natural":
+            return self._C_NAT
+        if rama == "sintetico":
+            return self._C_QUIM
+        return self._C_MIX
 
     def _c_dim(self, rama):
-        return self._C_NAT_DIM if rama == "natural" else self._C_QUIM_DIM
+        if rama == "natural":
+            return self._C_NAT_DIM
+        if rama == "sintetico":
+            return self._C_QUIM_DIM
+        return self._C_MIX_DIM
 
     def _radio(self, nodo):
         return self.RADIO_TRONCO if nodo.tipo == "tronco" else self.RADIO_CORTA
@@ -2586,7 +2785,8 @@ class PantallaArbolMedicamentos:
                          (x, 10 + barra_h),
                          (x + self.ANCHO_PANEL, 10 + barra_h), 1)
 
-        rama_lbl = ("NATURAL" if nodo.rama == "natural" else "SINTÉTICO")
+        rama_lbl = {"natural": "NATURAL", "sintetico": "SINTÉTICO",
+                    "mixta": "TRANSVERSAL"}.get(nodo.rama, "?")
         tipo_lbl = ("TRONCO" if nodo.tipo == "tronco" else "MEJORA")
         etq = self.fuente_mini.render(
             f"{rama_lbl}  ·  {tipo_lbl}", True, c_rama)

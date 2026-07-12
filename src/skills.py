@@ -19,50 +19,67 @@ from .economy import (
 )
 
 # (los colores acompañan a cada rama en la pantalla del árbol)
+# Rebalanceo: costos x3 aprox. — llenar una rama es un objetivo
+# de mediano plazo, no algo que sale con las primeras ventas.
 ARBOL = [
     {"nombre": "COCINA", "color": (214, 128, 52), "nodos": [
         {"id": "recetario", "nombre": "Recetario del abuelo",
          "desc": "La calidad mínima de cada tanda sube de 60% a 70%.",
-         "puntos": 3, "dinero": 100},
+         "puntos": 8, "dinero": 150},
         {"id": "tandas", "nombre": "Tandas grandes",
          "desc": "Cada cocinada rinde 6 platos en vez de 4.",
-         "puntos": 5, "dinero": 250},
+         "puntos": 15, "dinero": 400},
         {"id": "fuego", "nombre": "Fuego rápido",
          "desc": "Cocinar tarda 3 segundos en vez de 5.",
-         "puntos": 8, "dinero": 500},
+         "puntos": 25, "dinero": 800},
+        {"id": "estrella", "nombre": "Estrella clandestina",
+         "desc": "Cocina de autor: la calidad mínima sube a 85%.",
+         "puntos": 40, "dinero": 1500},
     ]},
     {"nombre": "VENTAS", "color": (222, 178, 84), "nodos": [
         {"id": "onda", "nombre": "Atención con onda",
          "desc": "Los platos se cobran un 25% más caros.",
-         "puntos": 3, "dinero": 100},
+         "puntos": 8, "dinero": 150},
         {"id": "fama", "nombre": "Fama del barrio",
          "desc": "Los clientes del local llegan mucho más seguido.",
-         "puntos": 5, "dinero": 250},
+         "puntos": 15, "dinero": 400},
         {"id": "fiel", "nombre": "Clientela fiel",
          "desc": "La fila del mostrador admite 8 clientes en vez de 5.",
-         "puntos": 8, "dinero": 400},
+         "puntos": 25, "dinero": 650},
+        {"id": "leyenda", "nombre": "Leyenda del barrio",
+         "desc": "El local es un clásico: los platos se cobran un "
+                 "50% más caros (reemplaza el 25%).",
+         "puntos": 40, "dinero": 1200},
     ]},
     {"nombre": "COMBATE", "color": (200, 70, 60), "nodos": [
         {"id": "aguante", "nombre": "Aguante",
          "desc": "Vida máxima 140 (te cura +40 al comprarla).",
-         "puntos": 3, "dinero": 150},
+         "puntos": 8, "dinero": 250},
         {"id": "pulso", "nombre": "Pulso firme",
          "desc": "La pistola dispersa la mitad al disparar.",
-         "puntos": 5, "dinero": 300},
+         "puntos": 15, "dinero": 500},
         {"id": "balas", "nombre": "Balas caseras",
          "desc": "El daño de la pistola sube de 25 a 40.",
-         "puntos": 8, "dinero": 600},
+         "puntos": 25, "dinero": 950},
+        {"id": "piel", "nombre": "Piel dura",
+         "desc": "Cuerpo de guerra: vida máxima 200 (te cura +60 "
+                 "al comprarla).",
+         "puntos": 40, "dinero": 1800},
     ]},
     {"nombre": "SIGILO", "color": (130, 170, 230), "nodos": [
         {"id": "perfil", "nombre": "Perfil bajo",
          "desc": "Los inspectores te ven un 25% menos lejos.",
-         "puntos": 3, "dinero": 150},
+         "puntos": 8, "dinero": 250},
         {"id": "pies", "nombre": "Pies ligeros",
          "desc": "Caminás un 15% más rápido.",
-         "puntos": 5, "dinero": 300},
+         "puntos": 15, "dinero": 500},
         {"id": "fantasma", "nombre": "Fantasma",
          "desc": "El nivel de búsqueda se enfría el doble de rápido.",
-         "puntos": 8, "dinero": 500},
+         "puntos": 25, "dinero": 800},
+        {"id": "sombra", "nombre": "Sombra urbana",
+         "desc": "Nadie te registra: los inspectores te ven la MITAD "
+                 "de lejos (reemplaza el 25%).",
+         "puntos": 40, "dinero": 1500},
     ]},
 ]
 
@@ -103,6 +120,8 @@ class Habilidades:
     # --- Stats modificados (el juego consulta siempre acá) ---
 
     def calidad_minima(self):
+        if self.tiene("estrella"):
+            return 0.85
         return 0.70 if self.tiene("recetario") else CALIDAD_MINIMA
 
     def unidades_por_tanda(self):
@@ -112,6 +131,8 @@ class Habilidades:
         return 3.0 if self.tiene("fuego") else DURACION_PRODUCCION
 
     def precio_comida_mult(self):
+        if self.tiene("leyenda"):
+            return 1.50
         return 1.25 if self.tiene("onda") else 1.0
 
     def intervalo_clientes_mult(self):
@@ -121,6 +142,8 @@ class Habilidades:
         return 8 if self.tiene("fiel") else 5
 
     def vida_max(self):
+        if self.tiene("piel"):
+            return 200
         return 140 if self.tiene("aguante") else VIDA_JUGADOR
 
     def dispersion_mult(self):
@@ -130,6 +153,8 @@ class Habilidades:
         return 40 if self.tiene("balas") else DANO_PISTOLA
 
     def vision_mult(self):
+        if self.tiene("sombra"):
+            return 0.5
         return 0.75 if self.tiene("perfil") else 1.0
 
     def velocidad_mult(self):

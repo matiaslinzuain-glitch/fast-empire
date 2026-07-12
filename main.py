@@ -30,7 +30,7 @@ import pygame
 from src.settings import (
     ANCHO_VENTANA, ALTO_VENTANA, FPS, TITULO, TILE,
     POSICION_INICIAL, VELOCIDAD_JUGADOR, COLOR_FONDO,
-    COLOR_ORO, COLOR_DINERO, COLOR_ERROR,
+    COLOR_ORO, COLOR_DINERO, COLOR_ERROR, COLOR_TEXTO_SUAVE,
     COLOR_PUNTO, COLOR_CONO, COLOR_CONO_ALERTA,
     CADENCIA_PISTOLA, VELOCIDAD_BALA,
     DANO_GOLPE, ALCANCE_GOLPE, CADENCIA_GOLPE,
@@ -374,8 +374,15 @@ class Juego:
                     self.arbol.abrir()
                     self.estado = "habilidades"
                 elif evento.key == pygame.K_r:
-                    self.arbol_meds_ui.abrir()
-                    self.estado = "medicamentos"
+                    # El árbol de I+D recién existe cuando el
+                    # Proveedor te metió en el negocio
+                    if self.economia.meds_desbloqueados:
+                        self.arbol_meds_ui.abrir()
+                        self.estado = "medicamentos"
+                    else:
+                        self._texto_sobre_jugador(
+                            "Todavía no conocés ese negocio…",
+                            COLOR_TEXTO_SUAVE)
                 elif evento.key == pygame.K_TAB:
                     self.mostrar_panel = not self.mostrar_panel
                 elif pygame.K_1 <= evento.key <= pygame.K_9:
@@ -438,8 +445,9 @@ class Juego:
                     self.inventario_ui.mensaje = self._alternar_arma()
 
         elif self.estado == "habilidades":
-            # R salta al otro árbol (el de I+D de medicamentos)
-            if evento.type == pygame.KEYDOWN and evento.key == pygame.K_r:
+            # R salta al otro árbol (si el Proveedor ya lo abrió)
+            if (evento.type == pygame.KEYDOWN and evento.key == pygame.K_r
+                    and self.economia.meds_desbloqueados):
                 self.arbol_meds_ui.abrir()
                 self.estado = "medicamentos"
                 return
@@ -1048,7 +1056,7 @@ class Juego:
             self._texto_sobre_jugador(
                 f"Creciendo… faltan {int(self.sotano.maceta) + 1}s",
                 COLOR_ORO)
-        elif self.sotano.plantar(inventario):
+        elif self.sotano.plantar(inventario, self.arbol_meds):
             self.audio.reproducir("cocinado")
             self._texto_sobre_jugador("Semilla plantada", COLOR_DINERO)
         else:
@@ -1080,8 +1088,17 @@ class Juego:
     def _usar_laboratorio(self):
         """E frente al laboratorio: cosechar o arrancar una cocinada."""
         inventario = self.economia.inventario
-        if self.sotano.cosechar_laboratorio(inventario):
-            self._texto_sobre_jugador("+1 medicamento químico", COLOR_DINERO)
+        cosechado = self.sotano.cosechar_laboratorio(
+            inventario, self.arbol_meds)
+        if cosechado == "fallo":
+            self._texto_sobre_jugador(
+                "¡La tanda se arruinó! (Estabilizador Térmico lo evita)",
+                COLOR_ERROR)
+        elif cosechado is not None:
+            nombre = ("medicamento químico" if cosechado == "med_quim"
+                      else "medicamento natural")
+            extra = " x2 — ¡unidad extra!" if self.sotano.ultimo_doble else ""
+            self._texto_sobre_jugador(f"+1 {nombre}{extra}", COLOR_DINERO)
         elif self.sotano.laboratorio is not None:
             self._texto_sobre_jugador(
                 f"Cocinando… faltan {int(self.sotano.laboratorio) + 1}s",
@@ -1092,10 +1109,11 @@ class Juego:
                 COLOR_ERROR)
         elif self.sotano.iniciar_laboratorio(inventario, self.arbol_meds):
             self.audio.reproducir("cocinado")
-            extra = (" — ¡sin gastar el compuesto!"
+            extra = (" — ¡sin gastar el insumo!"
                      if self.sotano.ultimo_sin_insumos else "")
-            self._texto_sobre_jugador(f"Compuesto al fuego{extra}",
-                                      COLOR_DINERO)
+            que = ("Planta al fuego" if self.sotano.lab_producto == "med_nat"
+                   else "Compuesto al fuego")
+            self._texto_sobre_jugador(f"{que}{extra}", COLOR_DINERO)
         else:
             self._texto_sobre_jugador(
                 "No tenés compuestos (se piden por el celular)", COLOR_ERROR)
@@ -1416,7 +1434,7 @@ class Juego:
         self._caer("¡TE ARRESTARON!", detalle)
 
     def _morir(self):
-        perdido, tirados = self.economia.muerte()
+        perdido, tirados = self.economia.muerte(self.arbol_meds)
         detalle = f"Perdiste ${perdido}"
         if tirados:
             detalle += f" y {tirados} medicamentos"
@@ -1527,7 +1545,7 @@ class Juego:
         # La Red: tus vendedores venden solos y presentan contactos
         self._sincronizar_vendedores_npc()
         for tipo_ev, vendedor, ganancia in self.red.actualizar(
-                dt, self.economia):
+                dt, self.economia, self.arbol_meds):
             if tipo_ev == "venta":
                 self._texto_sobre_jugador(
                     f"+${ganancia} — {vendedor.nombre} vendió en "

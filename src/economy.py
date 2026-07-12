@@ -537,10 +537,11 @@ class RedVentas:
         vendedor.agregar_stock(tipo, cantidad)
         return True
 
-    def actualizar(self, dt, economia):
+    def actualizar(self, dt, economia, arbol=None):
         """Reloj de reconquista + ventas pasivas de los colocados +
         cadena de contactos. Devuelve eventos [("venta", vendedor, $),
-        ("contacto", v, 0), ("perdida", v, 0)]."""
+        ("contacto", v, 0), ("perdida", v, 0)]. Con Red de
+        Distribución (skilltree) la comisión baja y venden más seguido."""
         eventos = []
         # Zonas limpiadas sin proteger: se agota la gracia
         for zona_idx in list(self.vulnerables):
@@ -563,14 +564,17 @@ class RedVentas:
             vendedor.timer -= dt
             if vendedor.timer > 0:
                 continue
-            vendedor.timer = random.uniform(*INTERVALO_VENTA_RED)
+            mult_int = arbol.mult_intervalo_red() if arbol else 1.0
+            vendedor.timer = random.uniform(*INTERVALO_VENTA_RED) * mult_int
             # Vende del stack más grande (desempata por precio).
             # La ganancia escala con el tier: proveerlos con mejor
             # medicamento multiplica lo que reporta la red.
             tipo = max(vendedor.stock,
                        key=lambda p: (vendedor.stock[p], VENTA_MED[p]))
             vendedor.sacar_una(tipo)
-            ganancia = round(VENTA_MED[tipo] * (1 - COMISION_VENDEDOR))
+            comision = COMISION_VENDEDOR * (
+                arbol.mult_comision_red() if arbol else 1.0)
+            ganancia = round(VENTA_MED[tipo] * (1 - comision))
             economia.dinero += ganancia
             economia.total_ilegal += ganancia
             vendedor.ventas += 1
