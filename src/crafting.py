@@ -25,6 +25,9 @@ import random
 
 from .inventory import Inventario
 
+# Grilla del estante del sótano (columnas, filas)
+GRILLA_ESTANTE = (5, 4)
+
 SEGUNDOS_PLANTA = 60.0        # cuánto tarda la maceta
 SEGUNDOS_LABORATORIO = 45.0   # cuánto tarda una cocinada química
 
@@ -55,7 +58,7 @@ class Sotano:
         # None = vacía · >0 = segundos restantes · LISTA = cosechar
         self.maceta = None
         self.laboratorio = None
-        self.estante = Inventario()
+        self.estante = Inventario(*GRILLA_ESTANTE)
         # True si el ÚLTIMO crafteo salió gratis (Cultivo Abundante /
         # Purificador de Mermas): main lo lee para el cartelito
         self.ultimo_sin_insumos = False
@@ -198,9 +201,11 @@ class Sotano:
 
     # -- estante: guardar / retirar de a uno --
     def guardar(self, inventario, id_item, cantidad=1):
-        if not inventario.quitar(id_item, cantidad):
+        if not inventario.tiene(id_item, cantidad):
             return False
-        self.estante.agregar(id_item, cantidad)
+        if not self.estante.agregar(id_item, cantidad):
+            return False   # estante lleno y sin stack del ítem
+        inventario.quitar(id_item, cantidad)
         return True
 
     def retirar(self, inventario, id_item, cantidad=1):
@@ -247,5 +252,130 @@ class Sotano:
         sotano.laboratorio = timer(datos.get("laboratorio"))
         sotano.lab_producto = datos.get("lab_producto", "med_quim")
         sotano.lab_fallo = datos.get("lab_fallo", False)
-        sotano.estante = Inventario.desde_dict(datos.get("estante"))
+        sotano.estante = Inventario.desde_dict(datos.get("estante"),
+                                               *GRILLA_ESTANTE)
         return sotano
+
+
+class MuebleColocado:
+    """Una maceta o mesa de laboratorio comprada en la mueblería y
+    colocada en el mundo (main.py la coloca con la tecla del hotbar
+    y la levanta con X). A diferencia de las estaciones fijas del
+    sótano, cada mueble lleva SU PROPIO timer: varias macetas
+    cultivan en paralelo. La lógica replica a la del Sotano, con
+    los mismos efectos del árbol de I+D (Fertilizante, Doble Faz,
+    Estabilizador Térmico, unidad extra, insumos gratis):
+      maceta   → semillas → (tiempo) → planta
+      mesa_lab → compuestos → (tiempo) → med. químico
+                 (con Doble Faz también planta → med. natural)
+    """
+
+    def __init__(self, tipo, col, fila, timer=None):
+        self.tipo = tipo          # "maceta" | "mesa_lab"
+        self.col = col            # posición en tiles del mapa
+        self.fila = fila
+        self.timer = timer        # None = vacío · >0 = falta · LISTA
+        self.producto = "med_quim"  # qué cocina la mesa_lab
+        self.fallo = False          # la tanda va a salir arruinada
+        self.ultimo_sin_insumos = False
+        self.ultimo_doble = False
+
+    @property
+    def ocupado(self):
+        """True si tiene trabajo en marcha o algo sin cosechar (no
+        se puede levantar con X en ese estado)."""
+        return self.timer is not None
+
+    @property
+    def total(self):
+        """Duración total del ciclo (para la barrita de progreso)."""
+        return (SEGUNDOS_PLANTA if self.tipo == "maceta"
+                else SEGUNDOS_LABORATORIO)
+
+    # -- ciclo de la maceta --
+    def plantar(self, inventario, arbol=None):
+        """Como Sotano.plantar: Fertilizante acorta el cultivo."""
+        if self.timer is not None or not inventario.quitar("semillas"):
+            return False
+        mult = arbol.mult_tiempo_maceta() if arbol else 1.0
+        self.timer = SEGUNDOS_PLANTA * mult
+        return True
+
+    def cosechar_planta(self, inventario):
+        if self.timer != LISTA:
+            return False
+        inventario.agregar("planta")
+        self.timer = None
+        return True
+
+    # -- ciclo de la mesa de laboratorio --
+    def iniciar_cocinada(self, inventario, arbol=None):
+        """Como Sotano.iniciar_laboratorio, sobre el timer propio:
+        compuestos → químico (o planta → natural con Doble Faz);
+        sin Estabilizador Térmico la tanda puede salir fallada."""
+        if self.timer is not None:
+            return False
+        producto = None
+        if ((arbol is None or arbol.desbloqueado("med_quim"))
+                and inventario.tiene("compuestos")):
+            producto, insumo = "med_quim", "compuestos"
+        elif (arbol is not None and arbol.lab_acepta_naturales()
+                and inventario.tiene("planta")):
+            producto, insumo = "med_nat", "planta"
+        if producto is None:
+            return False
+        gratis = (arbol is not None and
+                  random.random() < arbol.prob_insumos_gratis(producto))
+        if not gratis:
+            inventario.quitar(insumo)
+        self.ultimo_sin_insumos = gratis
+        self.producto = producto
+        self.fallo = (arbol is not None and
+                      random.random() < arbol.prob_fallo_lab())
+        mult = arbol.mult_tiempo_lab() if arbol else 1.0
+        self.timer = SEGUNDOS_LABORATORIO * mult
+        return True
+
+    def retirar_producto(self, inventario, arbol=None):
+        """Como Sotano.cosechar_laboratorio: None si no hay nada
+        listo, "fallo" si la tanda salió mal, o el id cosechado."""
+        if self.timer != LISTA:
+            return None
+        self.timer = None
+        if self.fallo:
+            self.fallo = False
+            return "fallo"
+        producto = self.producto or "med_quim"
+        cantidad = 1
+        if (arbol is not None and
+                random.random() < arbol.prob_unidad_extra(producto)):
+            cantidad = 2
+        self.ultimo_doble = cantidad == 2
+        inventario.agregar(producto, cantidad)
+        return producto
+
+    # -- reloj (corre en main junto con el del sótano) --
+    def actualizar(self, dt):
+        """Devuelve "planta_lista"/"quimico_listo" al terminar, o None."""
+        if self.timer is None or self.timer == LISTA:
+            return None
+        self.timer -= dt
+        if self.timer > 0:
+            return None
+        self.timer = LISTA
+        return "planta_lista" if self.tipo == "maceta" else "quimico_listo"
+
+    # -- guardado --
+    def a_dict(self):
+        return {"tipo": self.tipo, "col": self.col, "fila": self.fila,
+                "timer": "lista" if self.timer == LISTA else self.timer,
+                "producto": self.producto, "fallo": self.fallo}
+
+    @classmethod
+    def desde_dict(cls, datos):
+        timer = datos.get("timer")
+        mueble = cls(datos["tipo"], datos["col"], datos["fila"],
+                     LISTA if timer == "lista" else timer)
+        mueble.producto = datos.get("producto", "med_quim")
+        mueble.fallo = datos.get("fallo", False)
+        return mueble

@@ -16,6 +16,12 @@ TITULO = "Fast Empire — Fase 11"
 # --- Mundo ---
 TILE = 32  # tamaño de cada casillero del mapa en píxeles
 
+# Capas "por encima" del mapa de Tiled (techos, copas, toldos):
+# cuando una celda de esas capas tapa al jugador, la capa entera se
+# atenúa con un fundido para no ocultarlo.
+TECHO_ALPHA_OCULTO = 90   # opacidad (0-255) mientras tapa al jugador
+TECHO_VEL_FADE = 6.0      # velocidad del fundido (más alto = más rápido)
+
 # --- Jugador ---
 VELOCIDAD_JUGADOR = 220          # píxeles por segundo
 TAM_JUGADOR = (22, 26)           # hitbox (ancho, alto), un poco menor al tile
@@ -95,6 +101,23 @@ COLOR_BALA            = (255, 230, 150)
 COLOR_CONO            = (255, 235, 150)  # cono de visión patrullando
 COLOR_CONO_ALERTA     = (255, 96, 70)    # cono de visión persiguiendo
 COLOR_MIRA            = (235, 235, 235)  # línea de apuntado
+
+# --- Física de manejo (estilo GTA 1/2) ---
+# El vehículo tiene trompa: W acelera hacia donde apunta y A/D la
+# giran. La velocidad real persigue a la trompa según el "agarre"
+# de cada modelo (VEHICULOS en economy.py): esa diferencia es el
+# derrape. La simulación vive en src/vehicle.py.
+ACEL_VEHICULO = 260        # empuje del motor (px/s²)
+FRENO_VEHICULO = 540       # freno / aceleración de la reversa
+ROCE_VEHICULO = 130        # desaceleración natural al soltar todo
+GIRO_VEHICULO = 2.6        # radianes/s con el volante a fondo
+REVERSA_VEHICULO = 0.45    # vel. máx. marcha atrás (fracción de avance)
+CHOQUE_VEHICULO = 0.35     # rapidez que queda tras chocar una pared
+# La cámara sigue con un retraso suave y se adelanta hacia donde va
+# el auto, para dar tiempo a reaccionar en las esquinas.
+CAMARA_SUAVIZADO = 0.002   # resto de distancia tras 1 s (menor = más dura)
+CAMARA_ADELANTO = 0.45     # segundos de velocidad que se adelanta
+CAMARA_ADELANTO_MAX = 120  # tope del adelanto (px)
 
 # --- Fase 11: reloj de juego ---
 # 1 segundo real = 1 minuto de juego (un día dura 24 min reales)

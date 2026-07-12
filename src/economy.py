@@ -77,7 +77,84 @@ NOMBRE_ITEM = {
     "planta": "Plantas",
     "med_nat2": "Extractos botánicos", "med_nat3": "Panaceas",
     "med_quim2": "Antivirales",        "med_quim3": "Sueros",
+    "maceta": "Maceta",  "mesa_lab": "Mesa de laboratorio",
 }
+
+# --- Vehículos (concesionaria del Playón Industrial) ---
+# Un solo vehículo a la vez: comprar otro vende el actual al 50%.
+# El "baúl" son lugares (stacks) EXTRA de inventario: viven en
+# economia.baul y se administran desde el inventario grande (O).
+# El vehículo queda ESTACIONADO en el mundo: con F te subís y
+# conducís (velocidad = base × MULT_CONDUCIR × factor del modelo);
+# con F de nuevo lo estacionás donde estés.
+REVENTA_VEHICULO = 0.5
+MULT_CONDUCIR = 1.6   # conducir es mucho más rápido que caminar
+# Manejo (física de src/vehicle.py, multiplican las bases de settings):
+#   acel   — qué tan rápido levanta velocidad
+#   giro   — qué tan fino dobla el volante
+#   agarre — 0 = agarre perfecto; cerca de 1 = patina en las curvas
+VEHICULOS = {
+    "moto": {
+        "nombre": "Moto", "precio": 300, "baul": 0, "velocidad": 1.20,
+        "desc": "+20% de velocidad · sin baúl",
+        "acel": 1.25, "giro": 1.25, "agarre": 0.82,
+    },
+    "auto": {
+        "nombre": "Auto", "precio": 700, "baul": 5, "velocidad": 1.0,
+        "desc": "Baúl de 5 lugares · velocidad normal",
+        "acel": 1.0, "giro": 1.0, "agarre": 0.90,
+    },
+    "camioneta": {
+        "nombre": "Camioneta", "precio": 1400, "baul": 10, "velocidad": 0.90,
+        "desc": "Baúl de 10 lugares · -10% de velocidad",
+        "acel": 0.8, "giro": 0.85, "agarre": 0.94,
+    },
+}
+# Estos no se pueden guardar en el baúl (van siempre encima)
+ITEMS_SIEMPRE_ENCIMA = ("celular", "arma")
+
+# --- Mueblería (tile Q del tileset) ---
+# Los muebles comprados van al INVENTARIO como ítems: la tecla del
+# hotbar (1-9) coloca el mueble en el tile al que apuntás con el
+# mouse, y X frente a un mueble vacío lo levanta de vuelta. Cada
+# mueble colocado cultiva/cocina con su propio timer (MuebleColocado
+# en crafting.py).
+MUEBLES = {
+    "maceta": {
+        "nombre": "Maceta", "precio": 150,
+        "desc": "Cultivá plantas donde quieras — se coloca desde el hotbar",
+    },
+    "mesa_lab": {
+        "nombre": "Mesa de laboratorio", "precio": 400,
+        "desc": "Cociná químicos donde quieras — se coloca desde el hotbar",
+    },
+}
+
+# Grilla del inventario del jugador (expandible: nunca pierde ítems)
+GRILLA_JUGADOR = (5, 4)
+
+
+def dim_baul(lugares):
+    """(columnas, filas) de la grilla del baúl según sus lugares."""
+    if lugares <= 0:
+        return (1, 0)
+    columnas = min(5, lugares)
+    return (columnas, -(-lugares // columnas))
+
+# --- Personal del local (se contrata desde la app del celular) ---
+# El Mozo atiende la fila solo; el Chef cocina tandas clásicas
+# tomando ingredientes del CONTENEDOR de al lado de los hornos
+# (nunca del inventario de Walter). Cobran por trabajo hecho:
+# el Mozo a comisión (así nunca vende a pérdida) y el Chef un
+# fijo chico por tanda.
+COMISION_MOZO = 0.20  # se queda este % de cada venta que atiende
+SUELDO_CHEF = 6       # $ por tanda cocinada
+SUELDO_REPOSITOR = 3  # $ por caja llevada al contenedor
+PRECIO_MOZO = 300
+PRECIO_CHEF = 450
+PRECIO_REPOSITOR = 250
+MAX_CONTENEDOR = 24  # límite del contenedor de ingredientes (unidades)
+GRILLA_CONTENEDOR = (4, 1)  # slots visibles del contenedor del Chef
 
 # --- Armas y curación (almacén del barrio) ---
 PRECIO_PISTOLA = 150
@@ -135,7 +212,7 @@ class Economia:
     planta = _item_inventario("planta")
 
     def __init__(self):
-        self.inventario = Inventario()
+        self.inventario = Inventario(*GRILLA_JUGADOR, expandible=True)
         self.inventario.agregar("celular")   # tu primer "ítem"
         self.dinero = DINERO_INICIAL
         self.ingredientes = INGREDIENTES_INICIALES
@@ -153,6 +230,30 @@ class Economia:
         # Lo depositado en el banco NO se pierde en arrestos ni
         # muertes (esas penas solo tocan el efectivo `dinero`)
         self.banco = 0
+        # Vehículo activo (id de VEHICULOS o None) y su baúl:
+        # un inventario aparte con lugares limitados por el modelo
+        self.vehiculo = None
+        self.baul = Inventario(*dim_baul(0))
+        # Personal del local: si morís un empleado, se pierde la
+        # contratación (hay que volver a pagarla)
+        self.tiene_mozo = False
+        self.tiene_chef = False
+        self.tiene_repositor = False
+        # El contenedor de ingredientes al lado del horno (Chef):
+        # una grilla propia — `contenedor_ing` (abajo) lo expone
+        # como el contador de siempre para npcs.py y el savegame
+        self.contenedor = Inventario(*GRILLA_CONTENEDOR)
+
+    # El contador histórico del contenedor: leer suma lo que hay,
+    # asignar lo fija (así `economia.contenedor_ing -= 3` del Chef
+    # y el campo del savegame siguen funcionando igual)
+    @property
+    def contenedor_ing(self):
+        return self.contenedor.cantidad("ingredientes")
+
+    @contenedor_ing.setter
+    def contenedor_ing(self, valor):
+        self.contenedor.fijar("ingredientes", valor)
 
     def depositar(self, monto):
         """Mueve efectivo al banco. Devuelve cuánto entró de verdad."""
@@ -174,6 +275,96 @@ class Economia:
             return False
         self.dinero -= costo
         return True
+
+    # -- vehículos y baúl --
+    def velocidad_vehiculo(self):
+        """Multiplicador de velocidad del vehículo equipado."""
+        return VEHICULOS[self.vehiculo]["velocidad"] if self.vehiculo else 1.0
+
+    def slots_baul(self):
+        return VEHICULOS[self.vehiculo]["baul"] if self.vehiculo else 0
+
+    def reventa_vehiculo(self):
+        """Lo que paga la concesionaria por tu vehículo actual."""
+        if not self.vehiculo:
+            return 0
+        return round(VEHICULOS[self.vehiculo]["precio"] * REVENTA_VEHICULO)
+
+    def _achicar_baul(self, slots_nuevos):
+        """Pasa a mano los stacks que no entran en el baúl nuevo
+        (el inventario personal no tiene límite: siempre hay lugar).
+        Devuelve cuántos stacks se movieron."""
+        movidos = 0
+        while len(self.baul.stacks) > slots_nuevos:
+            id_item, cantidad = self.baul.stacks[-1]
+            self.baul.quitar(id_item, cantidad)
+            self.inventario.agregar(id_item, cantidad)
+            movidos += 1
+        return movidos
+
+    def comprar_vehiculo(self, id_v):
+        """Compra en la concesionaria. Solo efectivo (el banco no
+        cuenta); el vehículo anterior se entrega en parte de pago
+        al 50%. Devuelve (ok, mensaje)."""
+        datos = VEHICULOS[id_v]
+        if self.vehiculo == id_v:
+            return False, f"Ya andás en {datos['nombre']}."
+        reventa = self.reventa_vehiculo()
+        if self.dinero + reventa < datos["precio"]:
+            return False, ("No te alcanza el efectivo "
+                           "(el banco no cuenta acá).")
+        movidos = self._achicar_baul(datos["baul"])
+        self.baul.redimensionar(*dim_baul(datos["baul"]))
+        self.dinero += reventa - datos["precio"]
+        anterior = self.vehiculo
+        self.vehiculo = id_v
+        mensaje = f"¡Ya andás en {datos['nombre']}!"
+        if anterior:
+            mensaje += (f" Entregaste tu "
+                        f"{VEHICULOS[anterior]['nombre']} (+${reventa}).")
+        if movidos:
+            mensaje += f" {movidos} cosas del baúl pasaron a tu mano."
+        return True, mensaje
+
+    def vender_vehiculo(self):
+        """Vende el vehículo actual al 50% y vacía su baúl a mano.
+        Devuelve (ok, mensaje)."""
+        if not self.vehiculo:
+            return False, "No tenés vehículo para vender."
+        nombre = VEHICULOS[self.vehiculo]["nombre"]
+        reventa = self.reventa_vehiculo()
+        movidos = self._achicar_baul(0)
+        self.baul.redimensionar(*dim_baul(0))
+        self.dinero += reventa
+        self.vehiculo = None
+        mensaje = f"Vendiste tu {nombre} por ${reventa}."
+        if movidos:
+            mensaje += f" El baúl se vació a tu mano ({movidos} stacks)."
+        return True, mensaje
+
+    def mover_a_baul(self, id_item):
+        """Guarda el stack ENTERO en el baúl. Devuelve (ok, mensaje)."""
+        if not self.vehiculo:
+            return False, "No tenés vehículo con baúl."
+        if id_item in ITEMS_SIEMPRE_ENCIMA:
+            return False, "Eso va siempre encima."
+        if self.baul._stack(id_item) is None and not self.baul.hay_lugar():
+            return False, f"El baúl está lleno ({self.slots_baul()} lugares)."
+        cantidad = self.inventario.cantidad(id_item)
+        if not cantidad:
+            return False, "No tenés eso encima."
+        self.inventario.quitar(id_item, cantidad)
+        self.baul.agregar(id_item, cantidad)
+        return True, f"{NOMBRE_ITEM.get(id_item, id_item)} al baúl."
+
+    def sacar_de_baul(self, id_item):
+        """Trae el stack entero del baúl a la mano."""
+        cantidad = self.baul.cantidad(id_item)
+        if not cantidad:
+            return False, "Eso no está en el baúl."
+        self.baul.quitar(id_item, cantidad)
+        self.inventario.agregar(id_item, cantidad)
+        return True, f"{NOMBRE_ITEM.get(id_item, id_item)} a tu mano."
 
     def recibir_pedido(self, contenido):
         """Suma el contenido de una caja al inventario dinámico
@@ -228,14 +419,18 @@ class Economia:
         return self.total_ilegal >= UMBRAL_AMENAZA_RIVALES
 
     def _confiscar_meds(self, conservar_naturales=False):
-        """Se pierde TODO medicamento encima, de cualquier tier.
-        Con Aceite Esencial (skilltree) los naturales sobreviven."""
+        """Se pierde TODO medicamento encima, de cualquier tier —
+        también lo escondido en el baúl del vehículo (lo revisan
+        igual). Con Aceite Esencial (skilltree) los naturales
+        sobreviven."""
         confiscados = 0
         for pid in PRODUCTOS:
             if conservar_naturales and PRODUCTOS[pid]["rama"] == "natural":
                 continue
             confiscados += self.inventario.cantidad(pid)
             self.inventario.fijar(pid, 0)
+            confiscados += self.baul.cantidad(pid)
+            self.baul.fijar(pid, 0)
         return confiscados
 
     def arresto(self):
@@ -263,6 +458,7 @@ class Produccion:
         self.en_curso = False
         self.progreso = 0.0  # 0 a 1
         self.receta = "clasica"
+        self.del_chef = False  # quién puso esta tanda al fuego
 
     def iniciar(self, economia, receta="clasica"):
         """Arranca una tanda si alcanzan los ingredientes (y la plata,
@@ -276,6 +472,19 @@ class Produccion:
         self.en_curso = True
         self.progreso = 0.0
         self.receta = receta
+        self.del_chef = False
+        return True
+
+    def iniciar_chef(self):
+        """Arranca la tanda del Chef (siempre receta clásica). Los
+        ingredientes ya salieron del contenedor, así que acá no se
+        toca el inventario de Walter."""
+        if self.en_curso:
+            return False
+        self.en_curso = True
+        self.progreso = 0.0
+        self.receta = "clasica"
+        self.del_chef = True
         return True
 
     def actualizar(self, dt, economia, habilidades=None):

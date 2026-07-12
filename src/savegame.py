@@ -21,11 +21,12 @@ import time
 import unicodedata
 from pathlib import Path
 
-from .settings import POSICION_INICIAL, HORA_INICIAL
-from .economy import Caja, Trato, RedVentas, PEDIDOS
+from .settings import POSICION_INICIAL, HORA_INICIAL, TILE
+from .economy import (Caja, Trato, RedVentas, PEDIDOS,
+                      GRILLA_JUGADOR, dim_baul)
 from .events import GestorEventos, PedidoVIP
 from .inventory import Inventario
-from .crafting import Sotano
+from .crafting import Sotano, MuebleColocado
 from .skilltree import SkillTree, AppSalesManager
 
 RUTA_CARPETA = Path(__file__).resolve().parent.parent / "partidas"
@@ -37,7 +38,8 @@ CAMPOS_ECONOMIA = [
     "dinero", "banco", "producto", "calidad",
     "tiene_pistola", "arma_equipada", "puntos",
     "total_ilegal", "total_comida", "meds_desbloqueados",
-    "receta_especial",
+    "receta_especial", "vehiculo",
+    "tiene_mozo", "tiene_chef", "tiene_repositor", "contenedor_ing",
 ]
 
 # Contadores de partidas viejas que se migran al inventario
@@ -97,13 +99,22 @@ def guardar(juego):
     if not getattr(juego, "nombre_partida", None):
         return False
     datos = {
-        "version": 4,
+        # v5: muebles_mundo lista TODOS los muebles colocados
+        # (incluidos la maceta y el laboratorio heredados del sótano)
+        "version": 5,
         "nombre": juego.nombre_partida,
         "fecha": time.strftime("%Y-%m-%d %H:%M"),
         "economia": {campo: getattr(juego.economia, campo)
                      for campo in CAMPOS_ECONOMIA},
         "inventario": juego.economia.inventario.a_dict(),
+        "baul": juego.economia.baul.a_dict(),
+        "vehiculo_mundo": {
+            "pos": (list(juego.vehiculo_pos)
+                    if juego.vehiculo_pos is not None else None),
+            "montado": juego.montado,
+        },
         "sotano": juego.sotano.a_dict(),
+        "muebles_mundo": [m.a_dict() for m in juego.muebles_mundo],
         "habilidades": sorted(juego.habilidades.compradas),
         "arbol_meds": juego.arbol_meds.a_dict(),
         "app_ventas": juego.app_ventas.a_dict(),
@@ -158,20 +169,61 @@ def aplicar(juego, datos):
         if campo in datos["economia"]:
             setattr(economia, campo, datos["economia"][campo])
 
-    # Inventario dinámico (o migración de los contadores viejos)
+    # Inventario dinámico (o migración de los contadores viejos).
+    # desde_dict acepta la lista plana vieja Y la grilla nueva.
     if "inventario" in datos:
-        economia.inventario = Inventario.desde_dict(datos["inventario"])
+        economia.inventario = Inventario.desde_dict(
+            datos["inventario"], *GRILLA_JUGADOR, expandible=True)
     else:
         for campo in _CAMPOS_LEGADO:
             valor = datos["economia"].get(campo, 0)
             if valor:
                 setattr(economia, campo, valor)
+    # El baúl del vehículo (partidas viejas: vacío, sin vehículo).
+    # La grilla toma el tamaño del vehículo ya cargado arriba.
+    economia.baul = Inventario.desde_dict(
+        datos.get("baul"), *dim_baul(economia.slots_baul()))
+    # Dónde quedó el vehículo (o si Walter venía conduciendo). Las
+    # partidas anteriores a la F lo estacionan frente al local.
+    mundo_v = datos.get("vehiculo_mundo") or {}
+    juego.montado = bool(mundo_v.get("montado")) and bool(economia.vehiculo)
+    pos_v = mundo_v.get("pos")
+    if economia.vehiculo and not juego.montado:
+        juego.vehiculo_pos = (tuple(pos_v) if pos_v
+                              else (9.2 * TILE, 10.5 * TILE))
+    else:
+        juego.vehiculo_pos = None
     # El celular y el arma siempre están donde corresponde
     if not economia.inventario.tiene("celular"):
         economia.inventario.agregar("celular")
     if economia.tiene_pistola and not economia.inventario.tiene("arma"):
         economia.inventario.agregar("arma")
     juego.sotano = Sotano.desde_dict(datos.get("sotano"))
+    # --- Muebles colocados ---
+    # nueva_partida() ya convirtió la maceta y el laboratorio del
+    # .tmx en muebles (juego.muebles_mundo los trae puestos).
+    guardados = [MuebleColocado.desde_dict(m)
+                 for m in datos.get("muebles_mundo", [])]
+    if datos.get("version", 1) >= 5:
+        # El save ya lista TODOS los muebles (quizás movidos o
+        # levantados): los convertidos de fábrica se descartan
+        for mueble in juego.muebles_mundo:
+            juego.mapa.fijar_solido(mueble.col, mueble.fila, False)
+        juego.muebles_mundo = guardados
+    else:
+        # Partida de ANTES de la conversión: las estaciones del
+        # sótano siguen en su lugar y heredan los timers viejos
+        # del Sotano (que deja de llevarlos)
+        for mueble in juego.muebles_mundo:
+            if mueble.tipo == "maceta":
+                mueble.timer = juego.sotano.maceta
+            elif mueble.tipo == "mesa_lab":
+                mueble.timer = juego.sotano.laboratorio
+        juego.sotano.maceta = None
+        juego.sotano.laboratorio = None
+        juego.muebles_mundo.extend(guardados)
+    for mueble in juego.muebles_mundo:
+        juego.mapa.fijar_solido(mueble.col, mueble.fila, True)
 
     juego.habilidades.compradas = set(datos.get("habilidades", []))
     juego.arbol_meds = SkillTree.desde_dict(datos.get("arbol_meds"))
@@ -201,6 +253,8 @@ def aplicar(juego, datos):
     juego._sincronizar_matones()
     juego.vendedores_npc = []
     juego._sincronizar_vendedores_npc()
+    # El Mozo y el Chef vuelven a su puesto si estaban contratados
+    juego._sincronizar_empleados()
 
     juego.proveedor_visito = datos.get("proveedor_visito", False)
     juego.misiones_cumplidas = datos.get("misiones_cumplidas", 0)

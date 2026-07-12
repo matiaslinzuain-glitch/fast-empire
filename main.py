@@ -16,8 +16,9 @@
 #   1920x1080, sin bordes negros.
 #
 # Estados: menu · nombre · partidas · opciones · jugando ·
-#   pausa · tienda · celular · inventario · habilidades ·
-#   medicamentos · dialogo · banco · vendedor · cocina · estante
+#   pausa · tienda · muebleria · celular · inventario ·
+#   habilidades · medicamentos · dialogo · banco · vendedor ·
+#   cocina · estante
 #
 # Ejecutar desde esta carpeta:  python main.py
 # =========================================================
@@ -29,7 +30,7 @@ import pygame
 
 from src.settings import (
     ANCHO_VENTANA, ALTO_VENTANA, FPS, TITULO, TILE,
-    POSICION_INICIAL, VELOCIDAD_JUGADOR, COLOR_FONDO,
+    POSICION_INICIAL, VELOCIDAD_JUGADOR, TAM_JUGADOR, COLOR_FONDO,
     COLOR_ORO, COLOR_DINERO, COLOR_ERROR, COLOR_TEXTO_SUAVE,
     COLOR_PUNTO, COLOR_CONO, COLOR_CONO_ALERTA,
     CADENCIA_PISTOLA, VELOCIDAD_BALA,
@@ -40,6 +41,7 @@ from src.map import (
     Mapa, PUNTO_PUERTA, PUNTO_ENTREGA, POSICIONES_FILA,
     LUGARES_COMER, ENTRADAS_CLIENTES,
     PUNTO_SOTANO, PUNTO_TRAMPILLA, Y_SUBSUELO,
+    PUNTO_CONCESIONARIA, PUNTO_CONTENEDOR,
 )
 from src.player import Jugador
 from src.camera import Camara
@@ -49,11 +51,14 @@ from src.economy import (
     PUNTOS_POR_RIVAL, PUNTOS_POR_ESCAPE, UMBRAL_DESBLOQUEO_MEDS,
     PRECIO_CURACION, CURA_SANGUCHE, LUGARES_VENTA,
     MAX_TRATOS_ACTIVOS, MAX_OFERTAS, VENTAS_PARA_CONTACTO,
-    SEGUNDOS_RECONQUISTA,
+    SEGUNDOS_RECONQUISTA, VEHICULOS, MULT_CONDUCIR,
+    COMISION_MOZO, SUELDO_CHEF, PRECIO_MOZO, PRECIO_CHEF,
+    SUELDO_REPOSITOR, PRECIO_REPOSITOR,
+    MAX_CONTENEDOR, MUEBLES,
 )
 from src.npcs import (
     ClienteLocal, CompradorIlegal, Proveedor, VendedorZona,
-    ContactoFlash,
+    ContactoFlash, MozoNPC, ChefNPC, RepositorNPC,
 )
 from src.events import GestorEventos, PROB_EMBOSCADA, EMBOSCADORES
 from src.dialogue import CajaDialogo
@@ -73,11 +78,17 @@ from src.ui import (
     PantallaHabilidades, PantallaArbolMedicamentos,
     PantallaBanco, PantallaVendedor,
     PantallaCocina, PantallaNombre, PantallaPartidas,
-    PantallaEstante,
+    PantallaEstante, PantallaContenedor, PantallaConcesionaria,
+    PantallaMuebleria,
     SuperficieUI, FuenteUI, fijar_escala,
 )
+from src.sprites import (
+    dibujar_vehiculo, dibujar_vehiculo_conduciendo,
+    sprite_vehiculo, hitbox_vehiculo, dibujar_mueble,
+)
+from src.vehicle import FisicaVehiculo
 from src.crafting import (
-    Sotano, LISTA, SEGUNDOS_PLANTA, SEGUNDOS_LABORATORIO,
+    Sotano, LISTA, SEGUNDOS_PLANTA, MuebleColocado,
 )
 
 # Nombre legible de una zona de venta (zona_id = índice)
@@ -86,6 +97,9 @@ def nombre_zona(indice):
 
 # Radio (en píxeles) para interactuar con E
 RADIO_INTERACCION = TILE * 2
+# Hitbox del contenedor de ingredientes del Chef (su tile completo)
+RECT_CONTENEDOR = pygame.Rect(PUNTO_CONTENEDOR[0] * TILE,
+                              PUNTO_CONTENEDOR[1] * TILE, TILE, TILE)
 # Distancia a la que los inspectores escuchan un disparo
 ALCANCE_RUIDO_DISPARO = 340
 # Distancia a la que los NPCs entran en pánico por la violencia
@@ -133,6 +147,8 @@ class Juego:
         self.opciones = PantallaOpciones()
         self.pausa = MenuPausa()
         self.tienda = PantallaTienda()
+        self.concesionaria_ui = PantallaConcesionaria()
+        self.muebleria_ui = PantallaMuebleria()
         self.celular = PantallaCelular()
         self.inventario_ui = PantallaInventario()
         self.arbol = PantallaHabilidades()
@@ -142,10 +158,17 @@ class Juego:
         self.vendedor_ui = PantallaVendedor()
         self.cocina_ui = PantallaCocina()
         self.estante_ui = PantallaEstante()
+        self.contenedor_ui = PantallaContenedor(
+            "EL CONTENEDOR",
+            "Los ingredientes que dejes acá los usa el Chef para "
+            "cocinar tandas.",
+            solo_items=("ingredientes",),
+            tope_unidades=MAX_CONTENEDOR)
         self.nombre_ui = PantallaNombre()
         self.partidas_ui = PantallaPartidas()
         self.hud = HUD()
         self.fuente_mundo = FuenteUI(22)
+        self.fuente_mini = FuenteUI(16)
         self.capa_conos = pygame.Surface((ANCHO_VENTANA, ALTO_VENTANA), pygame.SRCALPHA)
         self.mostrar_panel = True   # TAB lo alterna
         self._gun_img = None        # sprite de pistola cacheado (16×16)
@@ -172,7 +195,25 @@ class Juego:
                              Y_SUBSUELO)
         self.economia = Economia()
         self.produccion = Produccion()
-        self.sotano = Sotano()   # crafteo: maceta, laboratorio, estante
+        self.sotano = Sotano()   # crafteo: mesa de armado y estante
+        # Muebles colocables: los comprados en la mueblería MÁS las
+        # estaciones que el .tmx trae pintadas (la maceta y el
+        # laboratorio del sótano se CONVIERTEN acá en muebles, así
+        # se usan y se levantan/mueven igual que los comprados).
+        self.muebles_mundo = []
+        for tiles, tipo in ((self.mapa.tiles_maceta, "maceta"),
+                            (self.mapa.tiles_laboratorio, "mesa_lab")):
+            for rect in tiles:
+                col, fila = rect.x // TILE, rect.y // TILE
+                self.mapa.reemplazar_por_piso(col, fila)
+                self.muebles_mundo.append(MuebleColocado(tipo, col, fila))
+            tiles.clear()   # que nadie más los trate como tiles fijos
+        # El vehículo en el mundo: dónde quedó estacionado (px de
+        # centro) y si Walter va arriba conduciendo (tecla F)
+        self.vehiculo_pos = None
+        self.montado = False
+        # Física de manejo estilo GTA (ángulo + derrape, src/vehicle.py)
+        self.fisica_vehiculo = FisicaVehiculo()
         self.habilidades = Habilidades()
         self.arbol_meds = SkillTree()      # I+D de medicamentos (tiers)
         self.app_ventas = AppSalesManager()  # app del celular: qué vender
@@ -185,6 +226,10 @@ class Juego:
         self.timer_cliente = 4.0
         self.pedidos = []             # {"id", "timer"} en camino
         self.cajas = []               # Caja esperando en la puerta
+        # El personal contratado (app Personal del celular)
+        self.mozo_npc = None
+        self.chef_npc = None
+        self.repositor_npc = None
 
         # El negocio ilegal (dormido hasta charlar con el Proveedor):
         # tratos acordados por celular en vez de un punto rotativo
@@ -331,6 +376,9 @@ class Juego:
                     else:
                         self.nueva_partida()
                         savegame.aplicar(self, datos)
+                        # La partida pudo guardarse al volante: el
+                        # rect debe tomar la hitbox del vehículo
+                        self._ajustar_hitbox(self.montado)
                         self.nombre_partida = entrada["nombre"]
                         self.partida_activa = True
                         self.estado = "jugando"
@@ -383,12 +431,21 @@ class Juego:
                         self._texto_sobre_jugador(
                             "Todavía no conocés ese negocio…",
                             COLOR_TEXTO_SUAVE)
+                elif evento.key == pygame.K_f:
+                    self._alternar_montado()
                 elif evento.key == pygame.K_TAB:
                     self.mostrar_panel = not self.mostrar_panel
+                elif evento.key == pygame.K_x:
+                    self._levantar_mueble()
                 elif pygame.K_1 <= evento.key <= pygame.K_9:
                     self._usar_hotbar(evento.key - pygame.K_1)
             elif evento.type == pygame.MOUSEBUTTONDOWN and evento.button == 1:
-                self._atacar()
+                if self.montado:
+                    self._texto_sobre_jugador(
+                        "Al volante no se pelea — F para bajarte",
+                        COLOR_ERROR)
+                else:
+                    self._atacar()
 
         elif self.estado == "pausa":
             accion = self.pausa.manejar_evento(evento)
@@ -432,6 +489,20 @@ class Juego:
                     self.celular.seleccion = 0
                 elif accion[0] == "pagar_soborno":
                     self._pagar_soborno()
+                elif accion[0] == "contratar_mozo":
+                    if self.economia.pagar(PRECIO_MOZO):
+                        self.economia.tiene_mozo = True
+                        self._sincronizar_empleados()
+                elif accion[0] == "contratar_chef":
+                    if (self.economia.tiene_mozo
+                            and self.economia.pagar(PRECIO_CHEF)):
+                        self.economia.tiene_chef = True
+                        self._sincronizar_empleados()
+                elif accion[0] == "contratar_repositor":
+                    if (self.economia.tiene_chef
+                            and self.economia.pagar(PRECIO_REPOSITOR)):
+                        self.economia.tiene_repositor = True
+                        self._sincronizar_empleados()
 
         elif self.estado == "inventario":
             accion = self.inventario_ui.manejar_evento(
@@ -443,6 +514,32 @@ class Juego:
                     self.inventario_ui.mensaje = self._comer_sanguche()
                 elif accion[0] == "alternar_arma":
                     self.inventario_ui.mensaje = self._alternar_arma()
+                elif accion[0] == "baul_guardar":
+                    _, mensaje = self.economia.mover_a_baul(accion[1])
+                    self.inventario_ui.mensaje = mensaje
+                elif accion[0] == "baul_sacar":
+                    _, mensaje = self.economia.sacar_de_baul(accion[1])
+                    self.inventario_ui.mensaje = mensaje
+
+        elif self.estado == "muebleria":
+            if self.muebleria_ui.manejar_evento(
+                    evento, self.economia) == "cerrar":
+                self.estado = "jugando"
+
+        elif self.estado == "concesionaria":
+            previo = self.economia.vehiculo
+            accion = self.concesionaria_ui.manejar_evento(
+                evento, self.economia)
+            if self.economia.vehiculo != previo:
+                # Cambió de vehículo: el nuevo te espera en la puerta
+                # (y el viejo se lo llevó la concesionaria)
+                if self.montado:
+                    self.montado = False
+                    self._ajustar_hitbox(False)
+                self.vehiculo_pos = (PUNTO_CONCESIONARIA
+                                     if self.economia.vehiculo else None)
+            if accion == "cerrar":
+                self.estado = "jugando"
 
         elif self.estado == "habilidades":
             # R salta al otro árbol (si el Proveedor ya lo abrió)
@@ -486,6 +583,12 @@ class Juego:
                     evento, self.economia, self.sotano) == "cerrar":
                 self.estado = "jugando"
 
+        elif self.estado == "contenedor":
+            if self.contenedor_ui.manejar_evento(
+                    evento, self.economia,
+                    self.economia.contenedor) == "cerrar":
+                self.estado = "jugando"
+
         elif self.estado == "cocina":
             accion = self.cocina_ui.manejar_evento(evento, self.economia)
             if accion == "cerrar":
@@ -513,6 +616,8 @@ class Juego:
         elif id_item == "celular":
             self.celular.abrir()
             self.estado = "celular"
+        elif id_item in MUEBLES:
+            self._colocar_mueble(id_item)
 
     def _alternar_arma(self):
         if not self.economia.tiene_pistola:
@@ -972,6 +1077,14 @@ class Juego:
             self.tienda.abrir()
             self.estado = "tienda"
             return
+        if self._cerca_de(self.mapa.tiles_muebleria):
+            self.muebleria_ui.abrir()
+            self.estado = "muebleria"
+            return
+        if self._cerca_de(self.mapa.tiles_concesionaria):
+            self.concesionaria_ui.abrir()
+            self.estado = "concesionaria"
+            return
         if self._cerca_de(self.mapa.tiles_banco):
             self.banco_ui.abrir()
             self.estado = "banco"
@@ -991,15 +1104,15 @@ class Juego:
         if self._cerca_de(self.mapa.tiles_subida):
             self._teletransportar(PUNTO_TRAMPILLA, "Subiste al local")
             return
-        # Estaciones físicas del sótano (E dentro del rango)
-        if self._cerca_de(self.mapa.tiles_maceta):
-            self._usar_maceta()
+        # Muebles colocables (la maceta y el laboratorio del sótano
+        # también lo son): cada uno con su propio timer
+        mueble = self._mueble_cerca()
+        if mueble is not None:
+            self._usar_mueble(mueble)
             return
+        # Estaciones fijas del sótano (E dentro del rango)
         if self._cerca_de(self.mapa.tiles_mesa):
             self._usar_mesa()
-            return
-        if self._cerca_de(self.mapa.tiles_laboratorio):
-            self._usar_laboratorio()
             return
         if self._cerca_de(self.mapa.tiles_estante):
             self.estante_ui.abrir()
@@ -1013,6 +1126,10 @@ class Juego:
             return
         if self._cliente_para_atender() is not None:
             self._atender_cliente()
+            return
+        if self._cerca_de([RECT_CONTENEDOR]):
+            self.contenedor_ui.abrir()
+            self.estado = "contenedor"
             return
         if self._cerca_de(self.mapa.tiles_cocina):
             if self.produccion.en_curso:
@@ -1039,6 +1156,7 @@ class Juego:
         """Mueve al jugador a otra coordenada del MISMO mapa (el
         sótano es un cuarto real tallado bajo la ciudad). La cámara
         salta con él, así que se siente como cambiar de escena."""
+        self._estacionar()   # el vehículo no baja escaleras
         self.jugador.pos.update(punto)
         self.jugador.rect.topleft = (round(punto[0]), round(punto[1]))
         self.camara.actualizar(self.jugador.rect)
@@ -1046,22 +1164,85 @@ class Juego:
         if aviso:
             self._texto_sobre_jugador(aviso, COLOR_ORO)
 
-    def _usar_maceta(self):
-        """E frente a la maceta: cosechar si está lista, plantar si
-        está vacía."""
-        inventario = self.economia.inventario
-        if self.sotano.cosechar_maceta(inventario):
-            self._texto_sobre_jugador("+1 planta cosechada", COLOR_DINERO)
-        elif self.sotano.maceta is not None:
-            self._texto_sobre_jugador(
-                f"Creciendo… faltan {int(self.sotano.maceta) + 1}s",
-                COLOR_ORO)
-        elif self.sotano.plantar(inventario, self.arbol_meds):
-            self.audio.reproducir("cocinado")
-            self._texto_sobre_jugador("Semilla plantada", COLOR_DINERO)
+    # -----------------------------------------------------
+    # El vehículo en el mundo (tecla F: subir / estacionar)
+    # -----------------------------------------------------
+    def _rect_vehiculo(self):
+        """Hitbox del vehículo estacionado (para la F y la pista):
+        del tamaño exacto del sprite."""
+        if self.vehiculo_pos is None:
+            return None
+        rect = pygame.Rect(
+            (0, 0), sprite_vehiculo(self.economia.vehiculo).get_size())
+        rect.center = (int(self.vehiculo_pos[0]), int(self.vehiculo_pos[1]))
+        return rect
+
+    def _ajustar_hitbox(self, montado):
+        """El rect del jugador pasa a ser la hitbox del vehículo al
+        subirse (cuadrada, para que al rotar siga a la textura) y
+        vuelve a TAM_JUGADOR al bajar. Mantiene el centro; si el
+        nuevo tamaño quedó pisando una pared, lo empuja afuera por
+        el eje de menor solape."""
+        rect = self.jugador.rect
+        centro = rect.center
+        if montado:
+            lado = hitbox_vehiculo(self.economia.vehiculo)
+            rect.size = (lado, lado)
         else:
+            rect.size = TAM_JUGADOR
+        rect.center = centro
+        for _ in range(4):
+            pared = next((p for p in self.mapa.paredes_cerca(rect)
+                          if rect.colliderect(p)), None)
+            if pared is None:
+                break
+            solape_x = min(pared.right - rect.left, rect.right - pared.left)
+            solape_y = min(pared.bottom - rect.top, rect.bottom - pared.top)
+            if solape_x < solape_y:
+                rect.x += solape_x if rect.centerx >= pared.centerx \
+                    else -solape_x
+            else:
+                rect.y += solape_y if rect.centery >= pared.centery \
+                    else -solape_y
+        self.jugador.pos.update(rect.topleft)
+
+    def _estacionar(self):
+        """Si Walter venía conduciendo, deja el vehículo acá."""
+        if not self.montado:
+            return
+        self.montado = False
+        self.vehiculo_pos = self.jugador.rect.center
+        self._ajustar_hitbox(False)
+
+    def _alternar_montado(self):
+        """F: subirse al vehículo estacionado o bajarse y dejarlo."""
+        if not self.economia.vehiculo:
+            return
+        nombre = VEHICULOS[self.economia.vehiculo]["nombre"]
+        if self.montado:
+            self._estacionar()
+            self.audio.reproducir("click")
+            self._texto_sobre_jugador(f"Estacionaste la {nombre}"
+                                      if nombre != "Auto"
+                                      else "Estacionaste el Auto",
+                                      COLOR_ORO)
+            return
+        rect_v = self._rect_vehiculo()
+        alcance = self.jugador.rect.inflate(RADIO_INTERACCION,
+                                            RADIO_INTERACCION)
+        if rect_v is None or not alcance.colliderect(rect_v):
             self._texto_sobre_jugador(
-                "No tenés semillas (se piden por el celular)", COLOR_ERROR)
+                f"Tu {nombre} quedó en otra parte", COLOR_ERROR)
+            return
+        self.montado = True
+        self.vehiculo_pos = None
+        # Walter se sube donde estaba estacionado (el vehículo no
+        # salta hacia el jugador) y el rect toma su hitbox.
+        self.jugador.rect.center = rect_v.center
+        self.jugador.pos.update(self.jugador.rect.topleft)
+        self.fisica_vehiculo.montar(getattr(self, "_vehiculo_izq", True))
+        self._ajustar_hitbox(True)
+        self.audio.reproducir("click")
 
     def _usar_mesa(self):
         """E frente a la mesa de armado. La mesa evalúa las recetas
@@ -1085,11 +1266,120 @@ class Juego:
                 "La mesa pide: planta + ziploc, o compuesto + ziploc",
                 COLOR_ERROR)
 
-    def _usar_laboratorio(self):
-        """E frente al laboratorio: cosechar o arrancar una cocinada."""
+    # -----------------------------------------------------
+    # Muebles colocables (comprados en la mueblería, más la
+    # maceta y el laboratorio heredados del sótano)
+    # -----------------------------------------------------
+    def _rect_mueble(self, mueble):
+        return pygame.Rect(mueble.col * TILE, mueble.fila * TILE,
+                           TILE, TILE)
+
+    def _mueble_cerca(self):
+        """El mueble colocado MÁS CERCANO al alcance de Walter, o
+        None (con varios juntos — el sótano — gana el más próximo)."""
+        alcance = self.jugador.rect.inflate(RADIO_INTERACCION,
+                                            RADIO_INTERACCION)
+        centro = pygame.Vector2(self.jugador.rect.center)
+        cercano, mejor = None, None
+        for mueble in self.muebles_mundo:
+            r = self._rect_mueble(mueble)
+            if not alcance.colliderect(r):
+                continue
+            distancia = centro.distance_squared_to(r.center)
+            if mejor is None or distancia < mejor:
+                cercano, mejor = mueble, distancia
+        return cercano
+
+    def _colocar_mueble(self, tipo):
+        """Tecla del hotbar sobre un mueble: lo coloca en el tile al
+        que apuntás con el mouse (el de adelante tuyo)."""
+        if self.montado:
+            self._texto_sobre_jugador(
+                "Al volante no se decora — bajate con F", COLOR_ERROR)
+            return
+        punto = (pygame.Vector2(self.jugador.rect.center)
+                 + self.jugador.direccion_mira * TILE)
+        col = int(punto.x) // TILE
+        fila = int(punto.y) // TILE
+        rect = pygame.Rect(col * TILE, fila * TILE, TILE, TILE)
+        rect_v = self._rect_vehiculo()
+        libre = (not self.mapa.es_solido_tile(col, fila)
+                 and not rect.colliderect(self.jugador.rect)
+                 and (rect_v is None or not rect.colliderect(rect_v)))
+        if not libre:
+            self._texto_sobre_jugador(
+                "Ahí no entra — apuntá a un piso libre", COLOR_ERROR)
+            return
+        if not self.economia.inventario.quitar(tipo):
+            return
+        self.muebles_mundo.append(MuebleColocado(tipo, col, fila))
+        self.mapa.fijar_solido(col, fila, True)
+        self.audio.reproducir("click")
+        self._texto_sobre_jugador(
+            f"{MUEBLES[tipo]['nombre']} colocada (X para levantarla)",
+            COLOR_DINERO)
+
+    def _levantar_mueble(self):
+        """X cerca de un mueble colocado: vuelve al inventario (solo
+        si no tiene trabajo en marcha ni nada sin cosechar)."""
+        mueble = self._mueble_cerca()
+        if mueble is None:
+            return
+        if mueble.ocupado:
+            self._texto_sobre_jugador(
+                "Está trabajando — retirá lo suyo antes de levantarla",
+                COLOR_ERROR)
+            return
+        self.muebles_mundo.remove(mueble)
+        self.mapa.fijar_solido(mueble.col, mueble.fila, False)
+        self.economia.inventario.agregar(mueble.tipo)
+        self.audio.reproducir("click")
+        self._texto_sobre_jugador(
+            f"{MUEBLES[mueble.tipo]['nombre']} al inventario", COLOR_ORO)
+
+    def _pista_mueble(self, mueble):
+        """El cartel de interacción para un mueble colocado."""
+        if mueble.tipo == "maceta":
+            if mueble.timer == LISTA:
+                return "E — Cosechar la planta"
+            if mueble.timer is not None:
+                return f"La planta crece… {int(mueble.timer) + 1}s"
+            return (f"E — Plantar una semilla (tenés "
+                    f"{self.economia.semillas})  ·  X — levantar")
+        if mueble.timer == LISTA:
+            return ("E — Retirar el medicamento natural"
+                    if mueble.producto == "med_nat"
+                    else "E — Retirar el medicamento químico")
+        if mueble.timer is not None:
+            return f"Cocinando… {int(mueble.timer) + 1}s"
+        if not self.arbol_meds.desbloqueado("med_quim"):
+            return ("Mesa de laboratorio — investigá químicos en el "
+                    "árbol (R)  ·  X — levantar")
+        return (f"E — Cocinar un compuesto (tenés "
+                f"{self.economia.compuestos})  ·  X — levantar")
+
+    def _usar_mueble(self, mueble):
+        """E frente a un mueble colocado: el ciclo de su tipo (como
+        las estaciones del sótano, pero con timer propio)."""
         inventario = self.economia.inventario
-        cosechado = self.sotano.cosechar_laboratorio(
-            inventario, self.arbol_meds)
+        if mueble.tipo == "maceta":
+            if mueble.cosechar_planta(inventario):
+                self._texto_sobre_jugador("+1 planta cosechada",
+                                          COLOR_DINERO)
+            elif mueble.timer is not None:
+                self._texto_sobre_jugador(
+                    f"Creciendo… faltan {int(mueble.timer) + 1}s",
+                    COLOR_ORO)
+            elif mueble.plantar(inventario, self.arbol_meds):
+                self.audio.reproducir("cocinado")
+                self._texto_sobre_jugador("Semilla plantada", COLOR_DINERO)
+            else:
+                self._texto_sobre_jugador(
+                    "No tenés semillas (se piden por el celular)",
+                    COLOR_ERROR)
+            return
+        # mesa_lab: el ciclo del laboratorio
+        cosechado = mueble.retirar_producto(inventario, self.arbol_meds)
         if cosechado == "fallo":
             self._texto_sobre_jugador(
                 "¡La tanda se arruinó! (Estabilizador Térmico lo evita)",
@@ -1097,26 +1387,26 @@ class Juego:
         elif cosechado is not None:
             nombre = ("medicamento químico" if cosechado == "med_quim"
                       else "medicamento natural")
-            extra = " x2 — ¡unidad extra!" if self.sotano.ultimo_doble else ""
+            extra = " x2 — ¡unidad extra!" if mueble.ultimo_doble else ""
             self._texto_sobre_jugador(f"+1 {nombre}{extra}", COLOR_DINERO)
-        elif self.sotano.laboratorio is not None:
+        elif mueble.timer is not None:
             self._texto_sobre_jugador(
-                f"Cocinando… faltan {int(self.sotano.laboratorio) + 1}s",
-                COLOR_ORO)
+                f"Cocinando… faltan {int(mueble.timer) + 1}s", COLOR_ORO)
         elif not self.arbol_meds.desbloqueado("med_quim"):
             self._texto_sobre_jugador(
                 "No sabés cocinar químicos — investigá en el árbol (R)",
                 COLOR_ERROR)
-        elif self.sotano.iniciar_laboratorio(inventario, self.arbol_meds):
+        elif mueble.iniciar_cocinada(inventario, self.arbol_meds):
             self.audio.reproducir("cocinado")
             extra = (" — ¡sin gastar el insumo!"
-                     if self.sotano.ultimo_sin_insumos else "")
-            que = ("Planta al fuego" if self.sotano.lab_producto == "med_nat"
+                     if mueble.ultimo_sin_insumos else "")
+            que = ("Planta al fuego" if mueble.producto == "med_nat"
                    else "Compuesto al fuego")
             self._texto_sobre_jugador(f"{que}{extra}", COLOR_DINERO)
         else:
             self._texto_sobre_jugador(
-                "No tenés compuestos (se piden por el celular)", COLOR_ERROR)
+                "No tenés compuestos (se piden por el celular)",
+                COLOR_ERROR)
 
     def _caja_cerca(self):
         alcance = self.jugador.rect.inflate(RADIO_INTERACCION, RADIO_INTERACCION)
@@ -1163,6 +1453,11 @@ class Juego:
             self._texto_sobre_jugador("Sin comida lista — andá a cocinar",
                                       COLOR_ERROR)
             return
+        self._despachar_cliente(cliente)
+
+    def _despachar_cliente(self, cliente):
+        """Cobra al primero de la fila y lo manda a comer (lo
+        comparten Walter y el Mozo). Devuelve el precio cobrado."""
         precio = self.economia.vender_comida(self.habilidades.precio_comida_mult())
         ocupados = {tuple(c.lugar) for c in self.comensales
                     if c.estado == "comiendo" and c.lugar is not None}
@@ -1174,6 +1469,7 @@ class Juego:
         self.audio.reproducir("venta")
         self.textos.append(TextoFlotante(
             cliente.rect.centerx, cliente.rect.top - 10, f"+${precio}", COLOR_DINERO))
+        return precio
 
     # -----------------------------------------------------
     # Denuncias y presencia policial dinámica
@@ -1241,7 +1537,10 @@ class Juego:
     # -----------------------------------------------------
     def _npcs_atacables(self):
         """Todos los NPCs con vida (Fase 11: también se pueden matar)."""
-        return self.fila + self.comensales + self.compradores
+        empleados = [n for n in (self.mozo_npc, self.chef_npc,
+                                 self.repositor_npc)
+                     if n is not None]
+        return self.fila + self.comensales + self.compradores + empleados
 
     def _atacar(self):
         usa_pistola = self.economia.tiene_pistola and self.economia.arma_equipada
@@ -1396,6 +1695,33 @@ class Juego:
         if faltan:
             self.rivales.extend(crear_matones(faltan))
 
+    def _punto_chef(self):
+        """Dónde se para el Chef: el centro del bloque de cocina,
+        corrido a la derecha para no taparse con los hornos."""
+        tiles = self.mapa.tiles_cocina
+        cx = sum(r.centerx for r in tiles) / len(tiles) + 24
+        cy = sum(r.centery for r in tiles) / len(tiles)
+        return cx, cy
+
+    def _sincronizar_empleados(self):
+        """Pone (o saca) a los NPCs del Mozo y el Chef según lo
+        contratado. Se llama al contratar y al cargar una partida."""
+        if self.economia.tiene_mozo and self.mozo_npc is None:
+            self.mozo_npc = MozoNPC()
+        elif not self.economia.tiene_mozo:
+            self.mozo_npc = None
+        if self.economia.tiene_chef and self.chef_npc is None:
+            self.chef_npc = ChefNPC(*self._punto_chef())
+        elif not self.economia.tiene_chef:
+            self.chef_npc = None
+        if self.economia.tiene_repositor and self.repositor_npc is None:
+            # Su puesto: pegado al contenedor que llena
+            puesto = (RECT_CONTENEDOR.centerx,
+                      RECT_CONTENEDOR.bottom + 14)
+            self.repositor_npc = RepositorNPC(puesto, PUNTO_PUERTA)
+        elif not self.economia.tiene_repositor:
+            self.repositor_npc = None
+
     def _sincronizar_vendedores_npc(self):
         """Cada vendedor colocado aparece como NPC estático en el
         centro de su base (El Flaco, aunque administra el Parque y
@@ -1444,6 +1770,7 @@ class Juego:
         """Reset compartido de arresto/muerte: Walter reaparece en el
         local, la búsqueda se limpia y los inspectores se van (caso
         cerrado). Los rivales siguen donde estaban."""
+        self._estacionar()   # el vehículo queda donde caíste
         self.jugador.reaparecer(*POSICION_INICIAL)
         self.jugador.vida_max = self.habilidades.vida_max()
         self.jugador.vida = self.jugador.vida_max
@@ -1479,12 +1806,29 @@ class Juego:
                                   and self.economia.tiene_pistola
                                   and self.economia.arma_equipada)
 
-        # Habilidad "Pies ligeros"
-        self.jugador.velocidad = VELOCIDAD_JUGADOR * self.habilidades.velocidad_mult()
         # Modo debug: sin paredes para Walter (pero sin salirse del mapa)
         paredes_jugador = [] if self.debug \
             else self.mapa.paredes_cerca(self.jugador.rect)
-        self.jugador.actualizar(dt, paredes_jugador)
+        # Conduciendo: física estilo GTA (W empuja hacia la trompa,
+        # A/D giran, el agarre del modelo decide cuánto derrapa).
+        # A pata: la de siempre, con "Pies ligeros" si la tenés.
+        if self.montado:
+            vel_max = (VELOCIDAD_JUGADOR * MULT_CONDUCIR
+                       * self.economia.velocidad_vehiculo())
+            self.fisica_vehiculo.actualizar(
+                dt, self.jugador, paredes_jugador, vel_max,
+                VEHICULOS[self.economia.vehiculo])
+            # Hacia dónde quedó la trompa (para el sprite estacionado)
+            self._vehiculo_izq = self.fisica_vehiculo.mirando_izq
+            # Al volante no se camina, pero los cooldowns siguen
+            self.jugador.cooldown_disparo = max(
+                0.0, self.jugador.cooldown_disparo - dt)
+            self.jugador.cooldown_golpe = max(
+                0.0, self.jugador.cooldown_golpe - dt)
+        else:
+            self.jugador.velocidad = (VELOCIDAD_JUGADOR
+                                      * self.habilidades.velocidad_mult())
+            self.jugador.actualizar(dt, paredes_jugador)
         if self.debug:
             self.jugador.pos.x = max(0, min(self.jugador.pos.x,
                                             self.mapa.ancho_px - self.jugador.rect.w))
@@ -1499,6 +1843,13 @@ class Juego:
             self.audio.reproducir("cocinado")
             self._texto_sobre_jugador(
                 f"¡Tanda lista! Calidad {round(calidad * 100)}%", COLOR_ORO)
+            # Si la tanda la cocinó el Chef, cobra su sueldo
+            if self.produccion.del_chef and self.chef_npc is not None:
+                self.economia.dinero -= SUELDO_CHEF
+                self.textos.append(TextoFlotante(
+                    self.chef_npc.rect.centerx,
+                    self.chef_npc.rect.top - 10,
+                    f"-${SUELDO_CHEF} chef", COLOR_ERROR))
 
         self._actualizar_local(dt)
         self._actualizar_pedidos(dt)
@@ -1535,6 +1886,15 @@ class Juego:
                 "¡La planta de la maceta está lista!"
                 if evento_sotano == "planta_lista"
                 else "¡El químico del laboratorio está listo!", COLOR_ORO)
+        # Los muebles colocados también trabajan solos
+        for mueble in self.muebles_mundo:
+            evento_mueble = mueble.actualizar(dt)
+            if evento_mueble is not None:
+                self.audio.reproducir("cocinado")
+                self._texto_sobre_jugador(
+                    "¡La planta de la maceta está lista!"
+                    if evento_mueble == "planta_lista"
+                    else "¡El químico de la mesa está listo!", COLOR_ORO)
 
         # Guardado automático
         self.timer_autosave -= dt
@@ -1635,6 +1995,20 @@ class Juego:
         self.fila = [c for c in self.fila if not c.terminado]
         self.comensales = [c for c in self.comensales if not c.terminado]
         self.compradores = [c for c in self.compradores if not c.terminado]
+        # Un empleado muerto se lleva la contratación con él
+        if self.mozo_npc is not None and self.mozo_npc.muerto:
+            self.mozo_npc = None
+            self.economia.tiene_mozo = False
+            self._texto_sobre_jugador("¡Te mataron al mozo!", COLOR_ERROR)
+        if self.chef_npc is not None and self.chef_npc.muerto:
+            self.chef_npc = None
+            self.economia.tiene_chef = False
+            self._texto_sobre_jugador("¡Te mataron al chef!", COLOR_ERROR)
+        if self.repositor_npc is not None and self.repositor_npc.muerto:
+            self.repositor_npc = None
+            self.economia.tiene_repositor = False
+            self._texto_sobre_jugador("¡Te mataron al repositor!",
+                                      COLOR_ERROR)
 
         # Búsqueda: decae más rápido con "Fantasma" (pero no mientras
         # la policía te está rastreando por un homicidio)
@@ -1657,7 +2031,11 @@ class Juego:
             if self.aviso_timer <= 0:
                 self.aviso = None
 
-        self.camara.actualizar(self.jugador.rect)
+        # Cámara con retraso suave; conduciendo se adelanta hacia
+        # donde viaja el auto para ver venir las esquinas
+        adelanto = (self.fisica_vehiculo.adelanto_camara()
+                    if self.montado else (0, 0))
+        self.camara.actualizar(self.jugador.rect, dt, adelanto)
 
     def _actualizar_local(self, dt):
         """Clientes del local: llegan, hacen fila, comen y se van."""
@@ -1686,6 +2064,37 @@ class Juego:
         for cliente in self.comensales:
             cliente.actualizar(dt)
         self.comensales = [c for c in self.comensales if not c.terminado]
+
+        # El Mozo atiende la fila solo (y cobra por cliente servido)
+        if self.mozo_npc is not None:
+            resultado = self.mozo_npc.actualizar(
+                dt, self.fila, self.economia.producto)
+            if resultado == "servido" and self.economia.producto > 0:
+                precio = self._despachar_cliente(self.fila[0])
+                sueldo = max(1, round(precio * COMISION_MOZO))
+                self.economia.dinero -= sueldo
+                self.textos.append(TextoFlotante(
+                    self.mozo_npc.rect.centerx,
+                    self.mozo_npc.rect.top - 10,
+                    f"-${sueldo} mozo", COLOR_ERROR))
+
+        # El Chef pone tandas al fuego con lo que haya en el
+        # contenedor (los ingredientes los descuenta él mismo)
+        if self.chef_npc is not None:
+            self.chef_npc.actualizar(dt, self.produccion,
+                                     self.economia, len(self.fila))
+
+        # El Repositor lleva las cajas de SOLO ingredientes de la
+        # puerta al contenedor del Chef (y cobra por caja)
+        if self.repositor_npc is not None:
+            resultado = self.repositor_npc.actualizar(
+                dt, self.cajas, self.economia)
+            if resultado == "entrega":
+                self.economia.dinero -= SUELDO_REPOSITOR
+                self.textos.append(TextoFlotante(
+                    self.repositor_npc.rect.centerx,
+                    self.repositor_npc.rect.top - 10,
+                    f"-${SUELDO_REPOSITOR} repositor", COLOR_ERROR))
 
     def _actualizar_pedidos(self, dt):
         """Deliveries en camino → cajas en la puerta."""
@@ -1725,8 +2134,17 @@ class Juego:
             if evento is not None:
                 return (f"E — Comprar {evento.cantidad} "
                         f"{NOMBRE_MED[evento.tipo]} (${evento.precio_total})")
+        rect_v = self._rect_vehiculo()
+        if rect_v is not None and self.jugador.rect.inflate(
+                RADIO_INTERACCION, RADIO_INTERACCION).colliderect(rect_v):
+            nombre = VEHICULOS[self.economia.vehiculo]["nombre"]
+            return f"F — Subir a tu {nombre}"
         if self._cerca_de(self.mapa.tiles_tienda):
             return "E — Almacén (armas y curas)"
+        if self._cerca_de(self.mapa.tiles_muebleria):
+            return "E — Mueblería (macetas y mesas de laboratorio)"
+        if self._cerca_de(self.mapa.tiles_concesionaria):
+            return "E — Concesionaria (motos, autos y camionetas)"
         if self._cerca_de(self.mapa.tiles_banco):
             return "E — Banco: guardá plata a salvo de multas"
         if self._cerca_de(self.mapa.tiles_hospital):
@@ -1736,18 +2154,16 @@ class Juego:
         if self._cerca_de(self.mapa.tiles_telefono):
             return "E — Usar el celular del local"
         if self._cerca_de(self.mapa.tiles_sotano):
-            pendiente = (self.sotano.maceta is not None
-                         or self.sotano.laboratorio is not None)
+            # Trabajo en marcha: algún mueble del subsuelo ocupado
+            pendiente = any(m.ocupado and m.fila * TILE >= Y_SUBSUELO
+                            for m in self.muebles_mundo)
             return ("E — Bajar al sótano" + (" (hay trabajo en marcha)"
                                              if pendiente else ""))
         if self._cerca_de(self.mapa.tiles_subida):
             return "E — Subir al local"
-        if self._cerca_de(self.mapa.tiles_maceta):
-            if self.sotano.maceta == LISTA:
-                return "E — Cosechar la planta"
-            if self.sotano.maceta is not None:
-                return f"La planta crece… {int(self.sotano.maceta) + 1}s"
-            return f"E — Plantar una semilla (tenés {self.economia.semillas})"
+        mueble = self._mueble_cerca()
+        if mueble is not None:
+            return self._pista_mueble(mueble)
         if self._cerca_de(self.mapa.tiles_mesa):
             proximo = self.sotano.proxima_receta(self.economia.inventario,
                                                  self.arbol_meds)
@@ -1759,15 +2175,6 @@ class Juego:
             if not self.arbol_meds.productos_desbloqueados():
                 return "Mesa de armado — investigá recetas en el árbol (R)"
             return f"Mesa de armado — te faltan insumos {stock}"
-        if self._cerca_de(self.mapa.tiles_laboratorio):
-            if self.sotano.laboratorio == LISTA:
-                return "E — Retirar el medicamento químico"
-            if self.sotano.laboratorio is not None:
-                return f"Cocinando… {int(self.sotano.laboratorio) + 1}s"
-            if not self.arbol_meds.desbloqueado("med_quim"):
-                return "Laboratorio — investigá químicos en el árbol (R)"
-            return ("E — Cocinar un compuesto "
-                    f"(tenés {self.economia.compuestos})")
         if self._cerca_de(self.mapa.tiles_estante):
             return "E — Revisar el estante"
         caja = self._caja_cerca()
@@ -1777,12 +2184,18 @@ class Juego:
             if self.economia.producto > 0:
                 return "E — Atender al cliente"
             return "El cliente espera… ¡cociná algo! (E en la cocina)"
+        if self._cerca_de([RECT_CONTENEDOR]):
+            return ("E — Abrir el contenedor del Chef "
+                    f"[{self.economia.contenedor_ing}/{MAX_CONTENEDOR}]")
         if self._cerca_de(self.mapa.tiles_cocina):
             if self.produccion.en_curso:
                 return "La tanda ya está en el fuego…"
             if self.economia.receta_especial:
                 return "E — Cocinar (elegí la receta)"
             return f"E — Cocinar tanda ({INGREDIENTES_POR_TANDA} ingredientes)"
+        if self.montado:
+            nombre = VEHICULOS[self.economia.vehiculo]["nombre"]
+            return f"Conduciendo tu {nombre}  ·  F — estacionar"
         return None
 
     # -----------------------------------------------------
@@ -1810,6 +2223,10 @@ class Juego:
                 self.pausa.dibujar(self.sup_ui)
             elif self.estado == "tienda":
                 self.tienda.dibujar(self.sup_ui, self.economia, self.jugador)
+            elif self.estado == "muebleria":
+                self.muebleria_ui.dibujar(self.sup_ui, self.economia)
+            elif self.estado == "concesionaria":
+                self.concesionaria_ui.dibujar(self.sup_ui, self.economia)
             elif self.estado == "celular":
                 self.celular.dibujar(
                     self.sup_ui, self.economia, self.tratos,
@@ -1833,18 +2250,36 @@ class Juego:
             elif self.estado == "estante":
                 self.estante_ui.dibujar(self.sup_ui, self.economia,
                                         self.sotano)
+            elif self.estado == "contenedor":
+                self.contenedor_ui.dibujar(self.sup_ui, self.economia,
+                                           self.economia.contenedor)
             elif self.estado == "cocina":
                 self.cocina_ui.dibujar(self.sup_ui, self.economia)
 
     def _dibujar_mundo(self):
         self.pantalla.fill(COLOR_FONDO)
         self.mapa.dibujar(self.pantalla, self.camara)
+        self._dibujar_muebles()
         self._dibujar_encuentros()
         self._dibujar_conos()
         for caja in self.cajas:
             caja.dibujar(self.pantalla, self.camara)
+        if self.economia.vehiculo and self.vehiculo_pos is not None:
+            # Tu vehículo, estacionado donde lo dejaste (F lo maneja)
+            punto = self.camara.aplicar(self._rect_vehiculo())
+            dibujar_vehiculo(self.pantalla, self.economia.vehiculo,
+                             punto.centerx, punto.bottom - 2,
+                             mirando_izq=getattr(self, "_vehiculo_izq",
+                                                 True))
+        self._dibujar_contenedor()
         for cliente in self.fila + self.comensales:
             cliente.dibujar(self.pantalla, self.camara)
+        if self.mozo_npc is not None:
+            self.mozo_npc.dibujar(self.pantalla, self.camara)
+        if self.chef_npc is not None:
+            self.chef_npc.dibujar(self.pantalla, self.camara)
+        if self.repositor_npc is not None:
+            self.repositor_npc.dibujar(self.pantalla, self.camara)
         if self.proveedor is not None:
             self.proveedor.dibujar(self.pantalla, self.camara)
             if self.proveedor.estado == "esperando":
@@ -1861,13 +2296,26 @@ class Juego:
         if self.contacto_flash is not None:
             self.contacto_flash.dibujar(self.pantalla, self.camara)
             self._signo(self.contacto_flash, "$", COLOR_ORO)
-        self._dibujar_estaciones_sotano()
         for enemigo in self.inspectores + self.rivales:
             enemigo.dibujar(self.pantalla, self.camara)
-        arma = self._cargar_gun() if self.economia.arma_equipada else None
-        self.jugador.dibujar(self.pantalla, self.camara, arma_img=arma)
+        if self.montado:
+            # Walter va al volante: el vehículo se dibuja en su lugar,
+            # rotado hacia donde apunta la trompa (24 direcciones)
+            rect_p = self.camara.aplicar(self.jugador.rect)
+            dibujar_vehiculo_conduciendo(self.pantalla,
+                                         self.economia.vehiculo,
+                                         rect_p.center,
+                                         self.fisica_vehiculo.angulo)
+        else:
+            arma = self._cargar_gun() if self.economia.arma_equipada else None
+            self.jugador.dibujar(self.pantalla, self.camara, arma_img=arma)
         for bala in self.proyectiles:
             bala.dibujar(self.pantalla, self.camara)
+        # Techos/copas/toldos del .tmx, por encima de todo el mundo:
+        # se atenúan cuando tapan a Walter (a pie o al volante, el
+        # vehículo se dibuja centrado en jugador.rect)
+        self.mapa.dibujar_techos(self.pantalla, self.camara,
+                                 self.jugador.rect)
         for texto in self.textos:
             texto.dibujar(self.sup_ui, self.camara, self.fuente_mundo)
         self._dibujar_alertas_enemigos()
@@ -1878,7 +2326,8 @@ class Juego:
             self._pista_interaccion(), self.busqueda, self.pedidos,
             round(self.reloj.get_fps()), self.mostrar_panel, self.mision,
             sin_leer=(sum(1 for t in self.tratos if t.estado == "oferta")
-                      + len(self.gestor.eventos)))
+                      + len(self.gestor.eventos)),
+            montado=self.montado)
         if self.aviso:
             # El cartelón tapa lo que haya: bajar el texto encolado
             self.sup_ui.aplanar()
@@ -1888,47 +2337,59 @@ class Juego:
                 "DEBUG · atravesás paredes", True, COLOR_ERROR)
             self.sup_ui.blit(etiqueta, (8, ALTO_VENTANA - 24))
 
-    def _dibujar_estaciones_sotano(self):
-        """El estado vivo de los props del sótano: la planta crece
-        sobre la maceta y las estaciones avisan cuando terminan."""
-        visible = self.pantalla.get_rect()
+    def _dibujar_contenedor(self):
+        """El cajón de madera al lado de los hornos, con su stock
+        de ingredientes a la vista."""
+        r = self.camara.aplicar(RECT_CONTENEDOR)
+        if not r.colliderect(self.pantalla.get_rect()):
+            return
+        caja = pygame.Rect(0, 0, 20, 16)
+        caja.center = r.center
+        pygame.draw.rect(self.pantalla, (180, 130, 70), caja)
+        pygame.draw.rect(self.pantalla, (120, 84, 44), caja, 1)
+        etiqueta = self.fuente_mini.render(
+            f"[{self.economia.contenedor_ing}]", True, COLOR_ORO)
+        self.sup_ui.blit(etiqueta, (caja.centerx - etiqueta.get_width() // 2,
+                                    caja.y - 14))
 
-        def _sobre(tiles, timer, total):
-            r = self.camara.aplicar(tiles[0])
+    def _dibujar_muebles(self):
+        """Los muebles colocados en el mundo: el sprite sobre el piso
+        que haya, la plantita creciendo y la barra de progreso (los
+        mismos códigos visuales que las estaciones del sótano)."""
+        visible = self.pantalla.get_rect()
+        for mueble in self.muebles_mundo:
+            r = self.camara.aplicar(self._rect_mueble(mueble))
             if not r.colliderect(visible):
-                return
-            if timer == LISTA:
-                # Parpadeo: hay algo para cosechar
+                continue
+            dibujar_mueble(self.pantalla, mueble.tipo, r)
+            if mueble.tipo == "maceta" and mueble.timer is not None:
+                # La planta se ve crecer, como en el sótano
+                if mueble.timer == LISTA:
+                    alto = 12
+                else:
+                    alto = max(2, int(12 * (1 - mueble.timer
+                                            / SEGUNDOS_PLANTA)))
+                pygame.draw.line(self.pantalla, (90, 170, 90),
+                                 (r.centerx, r.y + 12),
+                                 (r.centerx, r.y + 12 - alto), 2)
+                if alto > 5:
+                    pygame.draw.circle(self.pantalla, (110, 200, 110),
+                                       (r.centerx, r.y + 12 - alto), 3)
+            if mueble.timer == LISTA:
                 if (pygame.time.get_ticks() // 350) % 2 == 0:
-                    img = self.fuente_mundo.render("¡LISTO!", True, COLOR_ORO)
-                    self.sup_ui.blit(img, (r.centerx - img.get_width() // 2,
-                                           r.y - 20))
-            elif timer is not None:
-                # Barrita de progreso sobre el prop
-                progreso = 1 - timer / total
+                    img = self.fuente_mundo.render("¡LISTO!", True,
+                                                   COLOR_ORO)
+                    self.sup_ui.blit(img,
+                                     (r.centerx - img.get_width() // 2,
+                                      r.y - 20))
+            elif mueble.timer is not None:
+                progreso = 1 - mueble.timer / mueble.total
                 pygame.draw.rect(self.pantalla, (20, 18, 24),
                                  (r.x + 2, r.y - 8, r.width - 4, 5))
                 pygame.draw.rect(self.pantalla, COLOR_DINERO,
                                  (r.x + 3, r.y - 7,
-                                  int((r.width - 6) * progreso), 3))
-
-        _sobre(self.mapa.tiles_maceta, self.sotano.maceta, SEGUNDOS_PLANTA)
-        _sobre(self.mapa.tiles_laboratorio, self.sotano.laboratorio,
-               SEGUNDOS_LABORATORIO)
-        # La planta se ve crecer en la maceta
-        r = self.camara.aplicar(self.mapa.tiles_maceta[0])
-        if r.colliderect(visible) and self.sotano.maceta is not None:
-            if self.sotano.maceta == LISTA:
-                alto = 12
-            else:
-                alto = max(2, int(12 * (1 - self.sotano.maceta
-                                        / SEGUNDOS_PLANTA)))
-            pygame.draw.line(self.pantalla, (90, 170, 90),
-                             (r.centerx, r.y + 12),
-                             (r.centerx, r.y + 12 - alto), 2)
-            if alto > 5:
-                pygame.draw.circle(self.pantalla, (110, 200, 110),
-                                   (r.centerx, r.y + 12 - alto), 3)
+                                  int((r.width - 6) * max(0.0, progreso)),
+                                  3))
 
     def _dibujar_encuentros(self):
         """Marca violeta sobre la zona del/los tratos en curso."""
@@ -1997,7 +2458,22 @@ class Juego:
 
 
 def main():
-    Juego().ejecutar()
+    try:
+        Juego().ejecutar()
+    except Exception:
+        # Si el juego revienta, el traceback queda en crash.log
+        # además de la consola (para poder diagnosticarlo después)
+        import time
+        import traceback
+        from pathlib import Path
+        ruta = Path(__file__).resolve().parent / "crash.log"
+        try:
+            with open(ruta, "w", encoding="utf-8") as f:
+                f.write(time.strftime("%Y-%m-%d %H:%M:%S\n"))
+                f.write(traceback.format_exc())
+        except OSError:
+            pass
+        raise
 
 
 if __name__ == "__main__":

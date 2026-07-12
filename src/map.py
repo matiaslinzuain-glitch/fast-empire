@@ -1,13 +1,17 @@
 # =========================================================
-# FAST EMPIRE — Mapa y colisiones  [Fase 11]
-# El mapa creció a 120x100 tiles (3840x3200 px). La ciudad
-# original (columnas 0-74, filas 0-56) se conserva EXACTA
-# para no romper ninguna coordenada del juego; alrededor se
-# suman el Barrio Este, la Feria del Sur, la Zona Industrial
-# Nueva, el Barrio Bajo y el Muelle Nuevo. El campo ganó
-# granjas y arboledas para que no sea solo pasto.
+# FAST EMPIRE — Mapa y colisiones  [Fase 12: Tiled]
+# El mapa ahora se carga desde Tiled (assets/map/ciudad.tmx,
+# vía pytmx). Qué es sólido y qué es interactuable sale de las
+# propiedades personalizadas del tileset (solido, tipo, char):
+# nada de eso queda hardcodeado en el código.
 #
-# Leyenda:
+# La vieja grilla ASCII de 120x118 sigue acá abajo como LEGACY:
+# la usan tools/exportar_a_tiled.py (para regenerar el tileset)
+# y el minimapa de ui.py (hasta el Paso 5 de la migración).
+# Cuando ambos migren, todo el bloque ASCII se borra y el .tmx
+# queda como única fuente de verdad.
+#
+# Leyenda (de la grilla legacy):
 #   X = edificio / pared (sólido)
 #   H = casa con techo de tejas (sólida)
 #   A = árbol (sólido)
@@ -29,12 +33,22 @@
 #   . = calle de asfalto (transitable)
 #   , = pasto (transitable)
 #   ~ = camino de tierra / puente (transitable)
+#   --- tiles SOLO del tileset (no aparecen en la grilla ASCII:
+#       se pintan a mano en Tiled) ---
+#   G = pared de cristal (sólida)
+#   Q = mueblería (sólida, interactuable: comprar macetas y
+#       mesas de laboratorio)
+#   t = techo de tejas · c = techo de chapa · g = techo de
+#       cristal (los tres para la capa "techos": se dibujan por
+#       encima y se atenúan cuando tapan al jugador)
 # =========================================================
+
+from pathlib import Path
 
 import pygame
 
 from .settings import (
-    TILE,
+    TILE, TECHO_ALPHA_OCULTO, TECHO_VEL_FADE,
     COLOR_CALLE, COLOR_CALLE_LINEA,
     COLOR_PASTO, COLOR_PASTO_DET,
     COLOR_TIERRA,
@@ -291,6 +305,10 @@ _S_INDUS = ".XXXXXXXX." * 5 + ",,XXXXXXXXXXX,," + "ww" + ".XXXXXX..." * 5 + "."
 _S_INDUS_C = "." * 50 + "," * 15 + "ww" + "." * 51           # calle interna
 _S_PLAYON = (".XXXXXXXX." + "." * 30 + ".XXXXXXXX."          # Playón Industrial
              + "," * 15 + "ww" + ".HHH." * 10 + ".")
+# La fila de abajo del galpón este del Playón es la CONCESIONARIA:
+# fachada con toldo azul, puerta y tres vehículos en vitrina (V)
+_S_PLAYON_CONCES = (".XXXXXXXX." + "." * 30 + ".VVVVVVVV."
+                    + "," * 15 + "ww" + ".HHH." * 10 + ".")
 _S_BAJO = ".HHH." * 13 + "ww" + ".HHH." * 10 + "."
 _S_BAJO_CALLE = "." * 65 + "ww" + "." * 51
 _S_BAJO_POCKET = (".HHH." * 13 + "ww"                        # Callejón del Bajo
@@ -300,8 +318,9 @@ _S_MUELLE = "." * 65 + "ww" + "." * 51
 _S_AGUA = "w" * 118
 
 for _pieza in (_S_AVENIDA, _S_CALLE_W, _S_FERIA, _S_FERIA_P, _S_INDUS,
-               _S_INDUS_C, _S_PLAYON, _S_BAJO, _S_BAJO_CALLE,
-               _S_BAJO_POCKET, _S_DEPOSITOS, _S_MUELLE, _S_AGUA):
+               _S_INDUS_C, _S_PLAYON, _S_PLAYON_CONCES, _S_BAJO,
+               _S_BAJO_CALLE, _S_BAJO_POCKET, _S_DEPOSITOS, _S_MUELLE,
+               _S_AGUA):
     assert len(_pieza) == 118, f"Pieza sur de {len(_pieza)} (≠118)"
 
 _SUR_NUEVO = (
@@ -313,7 +332,8 @@ _SUR_NUEVO = (
     + [_fila_ancha(_S_CALLE_W)]                   # 65 calle
     + [_fila_ancha(_S_INDUS)] * 4                 # 66-69 galpones
     + [_fila_ancha(_S_INDUS_C)]                   # 70 calle interna
-    + [_fila_ancha(_S_PLAYON)] * 4                # 71-74 Playón Industrial
+    + [_fila_ancha(_S_PLAYON)] * 3                # 71-73 Playón Industrial
+    + [_fila_ancha(_S_PLAYON_CONCES)]             # 74 concesionaria
     + [_fila_ancha(_S_AVENIDA)] * 2               # 75-76 avenida
     + [_fila_ancha(_S_BAJO)] * 2                  # 77-78 barrio bajo
     + [_fila_ancha(_S_BAJO_CALLE)]                # 79
@@ -363,7 +383,17 @@ assert len(MAPA) == ALTO_MAPA
 assert {len(f) for f in MAPA} == {ANCHO_MAPA}, "Filas con anchos distintos"
 
 TILES_SOLIDOS = ("X", "H", "A", "C", "T", "M", "F", "w", "B", "S", "k",
-                 "D", "N", "U", "m", "b", "l", "e")
+                 "D", "N", "U", "m", "b", "l", "e", "V", "G", "Q")
+
+# --- Concesionaria del Playón (fachada V en la fila 74) ---
+# Columna donde arranca la fachada y qué muestra cada tile:
+# vitrinas con los tres modelos y la puerta de entrada.
+COL_CONCESIONARIA = 42
+_CONCES_EXHIBICION = {1: "moto", 4: "auto", 6: "camioneta"}  # col relativa
+_CONCES_PUERTA = 3
+# Donde te espera el vehículo recién comprado (frente a la puerta)
+PUNTO_CONCESIONARIA = ((COL_CONCESIONARIA + _CONCES_PUERTA + 0.5) * TILE,
+                       75.6 * TILE)
 
 # Frontera vertical ciudad/subsuelo (para la cámara por zonas)
 Y_SUBSUELO = FILAS_CIUDAD * TILE
@@ -384,6 +414,11 @@ POSICIONES_FILA = [                            # la fila frente al mostrador
     (5.0 * TILE, 7.5 * TILE),
     (5.8 * TILE, 7.7 * TILE),
 ]
+# El contenedor de ingredientes del Chef: piso libre a la derecha
+# del bloque de cocina (que en el .tmx ocupa las cols 2-3 de la
+# fila 1 — OJO: no coincide con la grilla ASCII legacy). No es un
+# tile del mapa ni tiene colisión: solo un punto de interacción.
+PUNTO_CONTENEDOR = (6, 1)                      # (col, fila)
 LUGARES_COMER = [                              # dónde se paran a comer
     (9.4 * TILE, 5.3 * TILE),
     (10.7 * TILE, 5.7 * TILE),
@@ -397,13 +432,35 @@ ENTRADAS_CLIENTES = [                          # por dónde llegan caminando
 ]
 
 
-class Mapa:
-    """Carga la grilla, genera los rects de colisión y se dibuja
-    en pantalla aplicando el offset de la cámara."""
+# Ruta por defecto del mapa exportado por Tiled
+RUTA_MAPA_TMX = Path(__file__).resolve().parent.parent / "assets" / "map" / "ciudad.tmx"
 
-    def __init__(self):
-        self.filas = len(MAPA)
-        self.columnas = len(MAPA[0])
+
+class Mapa:
+    """Mapa cargado desde Tiled (.tmx vía pytmx).
+
+    La geometría vive en la capa de tiles "suelo". Las colisiones y
+    los interactuables NO están hardcodeados: cada tile del tileset
+    trae propiedades personalizadas —
+      solido (bool)  → genera rect de colisión,
+      tipo (string)  → a qué lista de interactuables va (cocina,
+                       banco, concesionaria, ...),
+      char (string)  → el carácter ASCII original (minimapa/debug).
+    """
+
+    def __init__(self, ruta=None):
+        # Import diferido: pytmx convierte las imágenes al formato
+        # del display, así que solo puede cargarse con la ventana ya
+        # creada (main.py llama _crear_ventana() antes de Mapa()).
+        from pytmx.util_pygame import load_pygame
+
+        self.tmx = load_pygame(str(ruta or RUTA_MAPA_TMX))
+        if self.tmx.tilewidth != TILE or self.tmx.tileheight != TILE:
+            raise ValueError(
+                f"El .tmx usa tiles de {self.tmx.tilewidth}px "
+                f"y el juego espera {TILE}px")
+        self.columnas = self.tmx.width
+        self.filas = self.tmx.height
         self.ancho_px = self.columnas * TILE
         self.alto_px = self.filas * TILE
 
@@ -422,37 +479,100 @@ class Mapa:
         self.tiles_mesa = []
         self.tiles_laboratorio = []
         self.tiles_estante = []
+        self.tiles_concesionaria = []  # la fachada con vitrina (V)
+        self.tiles_muebleria = []      # la tienda de muebles (Q)
 
-        for fila, linea in enumerate(MAPA):
-            for col, tile in enumerate(linea):
-                if tile not in TILES_SOLIDOS:
-                    continue
-                rect = pygame.Rect(col * TILE, fila * TILE, TILE, TILE)
-                self.paredes.append(rect)
-                if tile == "C":
-                    self.tiles_cocina.append(rect)
-                elif tile == "T":
-                    self.tiles_tienda.append(rect)
-                elif tile == "M":
-                    self.tiles_mostrador.append(rect)
-                elif tile == "F":
-                    self.tiles_telefono.append(rect)
-                elif tile == "B":
-                    self.tiles_banco.append(rect)
-                elif tile == "S":
-                    self.tiles_hospital.append(rect)
-                elif tile == "D":
-                    self.tiles_sotano.append(rect)
-                elif tile == "U":
-                    self.tiles_subida.append(rect)
-                elif tile == "m":
-                    self.tiles_maceta.append(rect)
-                elif tile == "b":
-                    self.tiles_mesa.append(rect)
-                elif tile == "l":
-                    self.tiles_laboratorio.append(rect)
-                elif tile == "e":
-                    self.tiles_estante.append(rect)
+        # Propiedad "tipo" del tileset → lista de interactuables
+        listas_por_tipo = {
+            "cocina": self.tiles_cocina,
+            "tienda": self.tiles_tienda,
+            "mostrador": self.tiles_mostrador,
+            "telefono": self.tiles_telefono,
+            "banco": self.tiles_banco,
+            "hospital": self.tiles_hospital,
+            "sotano": self.tiles_sotano,
+            "subida": self.tiles_subida,
+            "maceta": self.tiles_maceta,
+            "mesa": self.tiles_mesa,
+            "laboratorio": self.tiles_laboratorio,
+            "estante": self.tiles_estante,
+            "concesionaria": self.tiles_concesionaria,
+            "muebleria": self.tiles_muebleria,
+        }
+
+        # Grillas derivadas para consultas O(1) por celda
+        self._solido = [[False] * self.columnas for _ in range(self.filas)]
+        self._imagen = [[None] * self.columnas for _ in range(self.filas)]
+        chars = [["."] * self.columnas for _ in range(self.filas)]
+        # char → primera imagen vista con ese char (para reemplazar
+        # un prop por piso cuando se convierte en mueble colocable)
+        self._imagen_por_char = {}
+
+        capa = self.tmx.get_layer_by_name("suelo")
+        props_por_gid = {}
+        for col, fila, gid in capa:
+            if not gid:
+                continue
+            imagen = self.tmx.get_tile_image_by_gid(gid)
+            self._imagen[fila][col] = imagen
+            props = props_por_gid.get(gid)
+            if props is None:
+                props = self.tmx.get_tile_properties_by_gid(gid) or {}
+                props_por_gid[gid] = props
+            chars[fila][col] = props.get("char", ".")
+            self._imagen_por_char.setdefault(props.get("char", "."), imagen)
+            if not props.get("solido"):
+                continue
+            self._solido[fila][col] = True
+            rect = pygame.Rect(col * TILE, fila * TILE, TILE, TILE)
+            self.paredes.append(rect)
+            lista = listas_por_tipo.get(props.get("tipo"))
+            if lista is not None:
+                lista.append(rect)
+
+        # Espejo ASCII de la grilla (mismo formato que el viejo MAPA;
+        # lo usa el minimapa y sirve para debuggear)
+        self.chars = ["".join(fila) for fila in chars]
+
+        # --- Capas "por encima" (techos, copas, toldos) ---
+        # Cualquier capa de TILES del .tmx que no sea "suelo" se
+        # dibuja DESPUÉS de las entidades (ver dibujar_techos). Cada
+        # capa es un dict {(col, fila): imagen} solo con sus celdas
+        # pintadas. Las capas ocultadas en Tiled (ojito) se ignoran.
+        self.capas_techo = []
+        for otra in self.tmx.visible_layers:
+            if otra.name == "suelo" or not hasattr(otra, "data"):
+                continue  # el suelo ya está cargado; los objetos no van
+            celdas = {}
+            for col, fila, gid in otra:
+                if gid:
+                    celdas[(col, fila)] = self.tmx.get_tile_image_by_gid(gid)
+            if celdas:
+                self.capas_techo.append(celdas)
+        # Estado del fundido de los techos (255 = opacidad plena)
+        self._alpha_techos = 255.0
+        self._techos_scratch = None
+        self._techos_tick = None
+
+    def reemplazar_por_piso(self, col, fila, char_piso="s"):
+        """Cambia la IMAGEN de una celda por la del piso indicado
+        (por defecto el del sótano). La usan las estaciones pintadas
+        en el .tmx (maceta / laboratorio) al convertirse en muebles
+        colocables: el mueble se dibuja aparte sobre este piso. La
+        solidez no se toca acá (el mueble la conserva hasta que lo
+        levantan con fijar_solido)."""
+        img = self._imagen_por_char.get(char_piso)
+        if img is not None and 0 <= fila < self.filas \
+                and 0 <= col < self.columnas:
+            self._imagen[fila][col] = img
+
+    def fijar_solido(self, col, fila, solido):
+        """Prende/apaga la solidez de una celda en runtime: lo usan
+        los muebles colocables (maceta / mesa de laboratorio). Toca
+        solo la grilla _solido — colisiones, pathfinding y líneas de
+        visión consultan ahí."""
+        if 0 <= fila < self.filas and 0 <= col < self.columnas:
+            self._solido[fila][col] = solido
 
     def es_solido_en(self, x, y):
         """True si el punto (px de mundo) cae sobre un tile sólido.
@@ -462,13 +582,13 @@ class Mapa:
         fila = int(y) // TILE
         if not (0 <= fila < self.filas and 0 <= col < self.columnas):
             return True  # fuera del mapa cuenta como pared
-        return MAPA[fila][col] in TILES_SOLIDOS
+        return self._solido[fila][col]
 
     def es_solido_tile(self, col, fila):
         """Como es_solido_en pero en coordenadas de tile (pathfinding)."""
         if not (0 <= fila < self.filas and 0 <= col < self.columnas):
             return True
-        return MAPA[fila][col] in TILES_SOLIDOS
+        return self._solido[fila][col]
 
     def paredes_cerca(self, rect, margen=2):
         """Rects sólidos en un entorno de `margen` tiles alrededor del
@@ -481,24 +601,105 @@ class Mapa:
         cercanas = []
         for fila in range(fila_min, fila_max + 1):
             for col in range(col_min, col_max + 1):
-                if MAPA[fila][col] in TILES_SOLIDOS:
+                if self._solido[fila][col]:
                     cercanas.append(pygame.Rect(col * TILE, fila * TILE, TILE, TILE))
         return cercanas
 
     def dibujar(self, superficie, camara):
-        """Dibuja solo los tiles visibles en pantalla (culling)."""
-        col_inicio = max(0, int(camara.offset.x) // TILE)
-        col_fin = min(self.columnas, (int(camara.offset.x) + superficie.get_width()) // TILE + 2)
-        fila_inicio = max(0, int(camara.offset.y) // TILE)
-        fila_fin = min(self.filas, (int(camara.offset.y) + superficie.get_height()) // TILE + 2)
+        """Blitea solo los tiles visibles en pantalla (culling)."""
+        ox = round(camara.offset.x)
+        oy = round(camara.offset.y)
+        col_inicio = max(0, ox // TILE)
+        col_fin = min(self.columnas,
+                      (ox + superficie.get_width()) // TILE + 2)
+        fila_inicio = max(0, oy // TILE)
+        fila_fin = min(self.filas,
+                       (oy + superficie.get_height()) // TILE + 2)
 
         for fila in range(fila_inicio, fila_fin):
+            fila_img = self._imagen[fila]
+            y = fila * TILE - oy
             for col in range(col_inicio, col_fin):
-                tile = MAPA[fila][col]
-                rect = camara.aplicar(pygame.Rect(col * TILE, fila * TILE, TILE, TILE))
-                self._dibujar_tile(superficie, tile, rect)
+                img = fila_img[col]
+                if img is not None:
+                    superficie.blit(img, (col * TILE - ox, y))
 
-    def _dibujar_tile(self, superficie, tile, rect):
+    def hay_techo_sobre(self, rect):
+        """True si alguna celda de las capas de techo cubre el rect
+        (en px de mundo; sirve para el jugador a pie o al volante)."""
+        if not self.capas_techo:
+            return False
+        col_min = rect.left // TILE
+        col_max = rect.right // TILE
+        fila_min = rect.top // TILE
+        fila_max = rect.bottom // TILE
+        for celdas in self.capas_techo:
+            for fila in range(fila_min, fila_max + 1):
+                for col in range(col_min, col_max + 1):
+                    if (col, fila) in celdas:
+                        return True
+        return False
+
+    def dibujar_techos(self, superficie, camara, rect_jugador):
+        """Dibuja las capas de techo POR ENCIMA de las entidades.
+        Mientras alguna celda tape al jugador la opacidad baja a
+        TECHO_ALPHA_OCULTO con un fundido suave, y vuelve a plena
+        al salir. El fundido lleva su propio reloj: no necesita el
+        dt del loop principal."""
+        if not self.capas_techo:
+            return
+
+        ticks = pygame.time.get_ticks()
+        dt = (0.0 if self._techos_tick is None
+              else min(0.1, (ticks - self._techos_tick) / 1000.0))
+        self._techos_tick = ticks
+        objetivo = (TECHO_ALPHA_OCULTO if self.hay_techo_sobre(rect_jugador)
+                    else 255.0)
+        self._alpha_techos += ((objetivo - self._alpha_techos)
+                               * min(1.0, TECHO_VEL_FADE * dt))
+        alpha = int(self._alpha_techos)
+
+        # Con opacidad plena se blitea directo; atenuado, los tiles
+        # van a una superficie intermedia transparente que se pega
+        # entera con set_alpha (así el fundido es parejo aunque los
+        # tiles se solapen).
+        destino = superficie
+        if alpha < 254:
+            if (self._techos_scratch is None
+                    or self._techos_scratch.get_size() != superficie.get_size()):
+                self._techos_scratch = pygame.Surface(superficie.get_size(),
+                                                      pygame.SRCALPHA)
+            destino = self._techos_scratch
+            destino.fill((0, 0, 0, 0))
+
+        ox = round(camara.offset.x)
+        oy = round(camara.offset.y)
+        col_inicio = max(0, ox // TILE)
+        col_fin = min(self.columnas,
+                      (ox + superficie.get_width()) // TILE + 2)
+        fila_inicio = max(0, oy // TILE)
+        fila_fin = min(self.filas,
+                       (oy + superficie.get_height()) // TILE + 2)
+        for celdas in self.capas_techo:
+            for fila in range(fila_inicio, fila_fin):
+                y = fila * TILE - oy
+                for col in range(col_inicio, col_fin):
+                    img = celdas.get((col, fila))
+                    if img is not None:
+                        destino.blit(img, (col * TILE - ox, y))
+
+        if destino is not superficie:
+            destino.set_alpha(alpha)
+            superficie.blit(destino, (0, 0))
+
+
+class _DibujanteAscii:
+    """LEGACY — el dibujado procedural de la vieja grilla ASCII.
+    Ya no se usa en el juego: tools/exportar_a_tiled.py lo invoca
+    para renderizar cada tile del tileset.png. Se borra junto con
+    la grilla ASCII cuando termine la migración a Tiled."""
+
+    def _dibujar_tile(self, superficie, tile, rect, col=0):
         """Dibuja un tile con detalles simples para dar textura pixel art."""
         if tile == "X":
             pygame.draw.rect(superficie, COLOR_EDIFICIO, rect)
@@ -614,6 +815,122 @@ class Mapa:
             pygame.draw.rect(superficie, COLOR_TIENDA, rect.inflate(-4, -4))
             pygame.draw.rect(superficie, COLOR_TIENDA_TOLDO,
                              (rect.x + 2, rect.y + 2, rect.width - 4, 9))
+        elif tile == "V":
+            # Concesionaria: toldo azul a rayas + vitrina con los
+            # tres modelos en exhibición y la puerta de entrada
+            from .sprites import dibujar_vehiculo
+            rel = col - COL_CONCESIONARIA
+            pygame.draw.rect(superficie, (60, 62, 70), rect)      # muro
+            if rel == _CONCES_PUERTA:
+                # Puerta vidriada de entrada
+                pygame.draw.rect(superficie, (30, 36, 48),
+                                 (rect.x + 6, rect.y + 11,
+                                  rect.width - 12, rect.height - 11))
+                pygame.draw.rect(superficie, (120, 160, 210),
+                                 (rect.x + 8, rect.y + 13,
+                                  rect.width - 16, rect.height - 17), 1)
+                pygame.draw.rect(superficie, (222, 178, 84),
+                                 (rect.x + 21, rect.centery + 4, 3, 5))
+            else:
+                # Vitrina: vidrio oscuro con reflejo
+                pygame.draw.rect(superficie, (22, 30, 44),
+                                 (rect.x + 2, rect.y + 11,
+                                  rect.width - 4, rect.height - 13))
+                pygame.draw.line(superficie, (58, 74, 100),
+                                 (rect.x + 4, rect.y + 13),
+                                 (rect.x + 12, rect.y + 13))
+                tipo = _CONCES_EXHIBICION.get(rel)
+                if tipo is not None:
+                    dibujar_vehiculo(superficie, tipo, rect.centerx,
+                                     rect.bottom - 3, ancho_max=26)
+            # Toldo azul con rayas claras (por encima de todo)
+            pygame.draw.rect(superficie, (44, 92, 170),
+                             (rect.x, rect.y, rect.width, 10))
+            for i in range(2):
+                pygame.draw.rect(superficie, (150, 185, 230),
+                                 (rect.x + 6 + i * 16, rect.y, 6, 10))
+        elif tile == "G":
+            # Pared de cristal: marco metálico, vidrio celeste con
+            # reflejo diagonal y parteluz al medio
+            pygame.draw.rect(superficie, (70, 74, 82), rect)
+            vidrio = rect.inflate(-6, -6)
+            pygame.draw.rect(superficie, (104, 156, 196), vidrio)
+            pygame.draw.line(superficie, (160, 205, 238),
+                             (vidrio.x + 3, vidrio.y + 10),
+                             (vidrio.x + 10, vidrio.y + 3), 2)
+            pygame.draw.line(superficie, (140, 190, 226),
+                             (vidrio.x + 8, vidrio.bottom - 4),
+                             (vidrio.right - 4, vidrio.y + 8), 1)
+            pygame.draw.rect(superficie, (70, 74, 82),
+                             (rect.centerx - 1, rect.y, 2, rect.height))
+        elif tile == "t":
+            # Techo de tejas: hileras desfasadas (capa "techos")
+            pygame.draw.rect(superficie, COLOR_CASA_TECHO, rect)
+            for i in range(4):
+                y_h = rect.y + i * 8
+                pygame.draw.rect(superficie, (118, 56, 44),
+                                 (rect.x, y_h + 6, rect.width, 2))
+                for j in range(4):
+                    x_t = rect.x + j * 8 + (4 if i % 2 else 0)
+                    if x_t + 3 <= rect.right:
+                        pygame.draw.rect(superficie, (176, 96, 74),
+                                         (x_t, y_h + 1, 3, 2))
+        elif tile == "c":
+            # Techo de chapa: acanalado gris con costura y remaches
+            pygame.draw.rect(superficie, (118, 122, 128), rect)
+            for x_c in range(rect.x + 3, rect.right, 6):
+                pygame.draw.rect(superficie, (98, 102, 108),
+                                 (x_c, rect.y, 2, rect.height))
+            pygame.draw.rect(superficie, (88, 92, 98),
+                             (rect.x, rect.centery - 1, rect.width, 2))
+            for x_c in range(rect.x + 4, rect.right, 12):
+                pygame.draw.rect(superficie, (150, 154, 160),
+                                 (x_c, rect.centery - 3, 2, 2))
+        elif tile == "g":
+            # Techo de cristal (invernadero): reja de marcos con
+            # paños de vidrio y brillo diagonal
+            pygame.draw.rect(superficie, (96, 142, 176), rect)
+            pygame.draw.line(superficie, (150, 195, 228),
+                             (rect.x + 4, rect.y + 12),
+                             (rect.x + 12, rect.y + 4), 2)
+            pygame.draw.line(superficie, (135, 182, 218),
+                             (rect.x + 14, rect.bottom - 6),
+                             (rect.right - 6, rect.y + 14), 1)
+            pygame.draw.rect(superficie, (70, 74, 82), rect, 2)
+            pygame.draw.rect(superficie, (70, 74, 82),
+                             (rect.centerx - 1, rect.y, 2, rect.height))
+            pygame.draw.rect(superficie, (70, 74, 82),
+                             (rect.x, rect.centery - 1, rect.width, 2))
+        elif tile == "Q":
+            # Mueblería: toldo verde a rayas y vidriera con una
+            # mesita y una maceta en exhibición
+            pygame.draw.rect(superficie, COLOR_CALLE, rect)
+            pygame.draw.rect(superficie, (96, 78, 58), rect.inflate(-4, -4))
+            # Vidriera
+            pygame.draw.rect(superficie, (34, 42, 54),
+                             (rect.x + 5, rect.y + 13,
+                              rect.width - 10, rect.height - 18))
+            # La mesita (tapa + patas)
+            pygame.draw.rect(superficie, (168, 136, 96),
+                             (rect.x + 7, rect.y + 19, 11, 3))
+            pygame.draw.rect(superficie, (128, 100, 68),
+                             (rect.x + 8, rect.y + 22, 2, 5))
+            pygame.draw.rect(superficie, (128, 100, 68),
+                             (rect.x + 15, rect.y + 22, 2, 5))
+            # La maceta con su plantita
+            pygame.draw.polygon(superficie, (150, 88, 52),
+                                [(rect.x + 21, rect.y + 21),
+                                 (rect.x + 27, rect.y + 21),
+                                 (rect.x + 26, rect.y + 26),
+                                 (rect.x + 22, rect.y + 26)])
+            pygame.draw.rect(superficie, (74, 130, 68),
+                             (rect.x + 23, rect.y + 17, 2, 4))
+            # Toldo verde con rayas claras
+            pygame.draw.rect(superficie, (58, 108, 62),
+                             (rect.x, rect.y, rect.width, 10))
+            for i in range(2):
+                pygame.draw.rect(superficie, (150, 200, 150),
+                                 (rect.x + 6 + i * 16, rect.y, 6, 10))
         elif tile == "B":
             # Banco: piedra con franja dorada
             pygame.draw.rect(superficie, COLOR_CALLE, rect)

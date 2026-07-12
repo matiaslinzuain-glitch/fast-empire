@@ -37,10 +37,14 @@ from .economy import (
     PRECIO_PISTOLA, PRECIO_BALAS, BALAS_POR_PACK,
     PRECIO_SANGUCHE, CURA_SANGUCHE, MAX_SANGUCHES,
     VENTAS_PARA_CONTACTO, COMISION_VENDEDOR,
-    NOMBRE_MED, NOMBRE_ITEM,
+    NOMBRE_MED, NOMBRE_ITEM, VEHICULOS, ITEMS_SIEMPRE_ENCIMA, MUEBLES,
+    PRECIO_MOZO, PRECIO_CHEF, PRECIO_REPOSITOR,
+    COMISION_MOZO, SUELDO_CHEF, SUELDO_REPOSITOR,
 )
+from .inventory import mover as mover_stack
 from .skills import ARBOL
 from .skilltree import NODOS, PRODUCTOS
+from .sprites import dibujar_vehiculo
 
 
 # ---------------------------------------------------------
@@ -360,6 +364,21 @@ def dibujar_icono(superficie, id_item, rect, economia=None):
             pygame.draw.line(superficie.raw, (90, 170, 90),
                              (cx, cy + 2), (cx + dx, cy - 8), 2)
         pygame.draw.circle(superficie.raw, (110, 200, 110), (cx, cy - 8), 3)
+    elif id_item == "maceta":
+        # Maceta vacía de la mueblería (mueble colocable)
+        pygame.draw.polygon(superficie.raw, (150, 88, 52),
+                            [(cx - 8, cy - 4), (cx + 8, cy - 4),
+                             (cx + 5, cy + 8), (cx - 5, cy + 8)])
+        pygame.draw.rect(superficie.raw, (70, 50, 34),
+                         (cx - 6, cy - 4, 12, 3))
+    elif id_item == "mesa_lab":
+        # Mesa de laboratorio con frascos (mueble colocable)
+        pygame.draw.rect(superficie.raw, (88, 92, 104),
+                         (cx - 9, cy - 1, 18, 8))
+        pygame.draw.rect(superficie.raw, (150, 90, 190),
+                         (cx - 6, cy - 8, 4, 7))
+        pygame.draw.rect(superficie.raw, (120, 70, 160),
+                         (cx + 2, cy - 6, 4, 5))
 
 
 # ---------------------------------------------------------
@@ -382,7 +401,8 @@ class HUD:
 
     def dibujar(self, superficie, jugador, economia, produccion,
                 reloj, trato_activo, pista, busqueda, pedidos, fps,
-                mostrar_panel=True, mision=None, sin_leer=0):
+                mostrar_panel=True, mision=None, sin_leer=0,
+                montado=False):
         # Vida + plata: arriba a la izquierda, compactos
         self._vida_y_plata(superficie, jugador, economia, mostrar_panel)
 
@@ -402,9 +422,26 @@ class HUD:
             self._pista(superficie, pista)
         if busqueda.nivel > 0:
             self._nivel_busqueda(superficie, busqueda)
+        if economia.vehiculo:
+            self._vehiculo_hud(superficie, economia, montado)
         img = self.fuente_chica.render(f"{fps} FPS", True, COLOR_TEXTO_SUAVE)
         superficie.blit(img, (ANCHO_VENTANA - img.get_width() - 8,
                               ALTO_VENTANA - img.get_height() - 6))
+
+    def _vehiculo_hud(self, superficie, economia, montado=False):
+        """Chip del vehículo equipado, esquina inferior derecha."""
+        datos = VEHICULOS[economia.vehiculo]
+        texto = (f"{datos['nombre']} · al volante" if montado
+                 else f"{datos['nombre']} [F]")
+        img = self.fuente_chica.render(texto, True,
+                                       COLOR_ORO if montado else COLOR_TEXTO)
+        ancho = 52 + img.get_width()
+        x = ANCHO_VENTANA - ancho - 8
+        y = ALTO_VENTANA - 56
+        superficie.blit(_panel(ancho, 32), (x, y))
+        dibujar_vehiculo(superficie.raw, economia.vehiculo,
+                         x + 24, y + 28, ancho_max=36)
+        superficie.blit(img, (x + 44, y_centrado(img, y, 32)))
 
     def _vida_y_plata(self, superficie, jugador, economia, mostrar_panel):
         superficie.blit(_panel(190, 70 if mostrar_panel else 24), (8, 8))
@@ -993,6 +1030,179 @@ class PantallaTienda(_MenuVertical):
 
 
 # ---------------------------------------------------------
+# La mueblería: vende macetas y mesas de laboratorio. Van al
+# INVENTARIO como ítems: con la tecla del hotbar se colocan en
+# el tile al que apuntás, y X frente a un mueble vacío lo
+# levanta de vuelta (la lógica vive en main.py).
+# ---------------------------------------------------------
+class PantallaMuebleria(_MenuVertical):
+    def __init__(self):
+        super().__init__([])
+        self.fuente_titulo = FuenteUI(56)
+        self.fuente_chica = FuenteUI(24)
+        self._ids = []
+        self.mensaje = ""
+        self.color_mensaje = COLOR_TEXTO
+
+    def abrir(self):
+        self.seleccion = 0
+        self.mensaje = ""
+
+    def _armar_opciones(self, economia):
+        self._ids, self.opciones = [], []
+        for id_m, datos in MUEBLES.items():
+            encima = economia.inventario.cantidad(id_m)
+            etiqueta = f"{datos['nombre']} — ${datos['precio']}"
+            if encima:
+                etiqueta += f"  (llevás {encima})"
+            self._ids.append(id_m)
+            self.opciones.append(etiqueta)
+        self._ids.append("salir")
+        self.opciones.append("Salir")
+
+    def manejar_evento(self, evento, economia):
+        if evento.type == pygame.KEYDOWN and evento.key == pygame.K_ESCAPE:
+            return "cerrar"
+        self._armar_opciones(economia)
+        i = self._navegar(evento)
+        if i is None:
+            return None
+        id_m = self._ids[i]
+        if id_m == "salir":
+            return "cerrar"
+        datos = MUEBLES[id_m]
+        if economia.pagar(datos["precio"]):
+            economia.inventario.agregar(id_m)
+            self.mensaje = (f"{datos['nombre']} al inventario — colocala "
+                            f"con su tecla del hotbar.")
+            self.color_mensaje = COLOR_DINERO
+        else:
+            self.mensaje = "No te alcanza la plata."
+            self.color_mensaje = COLOR_ERROR
+        return None
+
+    def dibujar(self, superficie, economia):
+        self._armar_opciones(economia)
+        velo = _panel(ANCHO_VENTANA, ALTO_VENTANA, alpha=170)
+        superficie.blit(velo, (0, 0))
+        titulo = self.fuente_titulo.render("MUEBLERÍA", True, COLOR_ORO)
+        superficie.blit(titulo, ((ANCHO_VENTANA - titulo.get_width()) // 2, 80))
+        info = self.fuente_chica.render(
+            f"$ {economia.dinero} en mano", True, COLOR_TEXTO_SUAVE)
+        superficie.blit(info, ((ANCHO_VENTANA - info.get_width()) // 2, 145))
+        self._dibujar_opciones(superficie, 210, interlinea=48)
+
+        # Ficha del mueble seleccionado
+        sel_id = self._ids[self.seleccion]
+        if sel_id in MUEBLES:
+            desc = self.fuente_chica.render(
+                MUEBLES[sel_id]["desc"], True, COLOR_TEXTO)
+            superficie.blit(desc,
+                            ((ANCHO_VENTANA - desc.get_width()) // 2, 400))
+        if self.mensaje:
+            img = self.fuente_chica.render(self.mensaje, True,
+                                           self.color_mensaje)
+            superficie.blit(img, ((ANCHO_VENTANA - img.get_width()) // 2, 430))
+        pie = self.fuente_chica.render(
+            "Mouse o W/S + ENTER  ·  ESC salir", True, COLOR_TEXTO_SUAVE)
+        superficie.blit(pie, ((ANCHO_VENTANA - pie.get_width()) // 2,
+                              ALTO_VENTANA - 60))
+
+
+# ---------------------------------------------------------
+# La concesionaria del Playón: un vehículo a la vez. Comprar
+# otro entrega el actual al 50%; E sobre el equipado lo vende.
+# ---------------------------------------------------------
+class PantallaConcesionaria(_MenuVertical):
+    def __init__(self):
+        super().__init__([])
+        self.fuente_titulo = FuenteUI(56)
+        self.fuente_chica = FuenteUI(24)
+        self._ids = []
+        self.mensaje = ""
+        self.color_mensaje = COLOR_TEXTO
+
+    def abrir(self):
+        self.seleccion = 0
+        self.mensaje = ""
+
+    def _armar_opciones(self, economia):
+        """Etiquetas dinámicas: el equipado muestra la reventa y los
+        demás el precio (con la parte de pago si entregás el tuyo)."""
+        self._ids, self.opciones = [], []
+        for id_v, datos in VEHICULOS.items():
+            if economia.vehiculo == id_v:
+                etiqueta = (f"{datos['nombre']} — EQUIPADO "
+                            f"(vender: ${economia.reventa_vehiculo()})")
+            elif economia.vehiculo:
+                neto = datos["precio"] - economia.reventa_vehiculo()
+                etiqueta = (f"{datos['nombre']} — ${datos['precio']}"
+                            f"  (con la entrega: ${neto})")
+            else:
+                etiqueta = f"{datos['nombre']} — ${datos['precio']}"
+            self._ids.append(id_v)
+            self.opciones.append(etiqueta)
+        self._ids.append("salir")
+        self.opciones.append("Salir")
+
+    def manejar_evento(self, evento, economia):
+        if evento.type == pygame.KEYDOWN and evento.key == pygame.K_ESCAPE:
+            return "cerrar"
+        self._armar_opciones(economia)
+        i = self._navegar(evento)
+        if i is None:
+            return None
+        id_v = self._ids[i]
+        if id_v == "salir":
+            return "cerrar"
+        if economia.vehiculo == id_v:
+            ok, mensaje = economia.vender_vehiculo()
+        else:
+            ok, mensaje = economia.comprar_vehiculo(id_v)
+        self.mensaje = mensaje
+        self.color_mensaje = COLOR_DINERO if ok else COLOR_ERROR
+        return None
+
+    def dibujar(self, superficie, economia):
+        self._armar_opciones(economia)
+        velo = _panel(ANCHO_VENTANA, ALTO_VENTANA, alpha=170)
+        superficie.blit(velo, (0, 0))
+        titulo = self.fuente_titulo.render("CONCESIONARIA DEL PLAYÓN",
+                                           True, COLOR_ORO)
+        superficie.blit(titulo, ((ANCHO_VENTANA - titulo.get_width()) // 2, 80))
+        actual = (VEHICULOS[economia.vehiculo]["nombre"]
+                  if economia.vehiculo else "a pata")
+        info = self.fuente_chica.render(
+            f"$ {economia.dinero} en mano  ·  andás {actual}",
+            True, COLOR_TEXTO_SUAVE)
+        superficie.blit(info, ((ANCHO_VENTANA - info.get_width()) // 2, 145))
+
+        self._dibujar_opciones(superficie, 200, interlinea=52)
+        # El sprite de cada modelo, a la izquierda de su opción
+        for i, rect in enumerate(self._rects):
+            if self._ids[i] in VEHICULOS:
+                dibujar_vehiculo(superficie.raw, self._ids[i],
+                                 rect.x - 34, rect.bottom - 10)
+
+        # Ficha del modelo seleccionado
+        sel_id = self._ids[self.seleccion]
+        if sel_id in VEHICULOS:
+            datos = VEHICULOS[sel_id]
+            desc = self.fuente_chica.render(datos["desc"], True, COLOR_TEXTO)
+            superficie.blit(desc,
+                            ((ANCHO_VENTANA - desc.get_width()) // 2, 418))
+        if self.mensaje:
+            img = self.fuente_chica.render(self.mensaje, True,
+                                           self.color_mensaje)
+            superficie.blit(img, ((ANCHO_VENTANA - img.get_width()) // 2, 448))
+        pie = self.fuente_chica.render(
+            "Mouse o W/S + ENTER  ·  ESC salir  ·  solo efectivo",
+            True, COLOR_TEXTO_SUAVE)
+        superficie.blit(pie, ((ANCHO_VENTANA - pie.get_width()) // 2,
+                              ALTO_VENTANA - 60))
+
+
+# ---------------------------------------------------------
 # EL CELULAR: cuatro apps —
 #   0 Comidas (pedidos de ingredientes con delivery)
 #   1 Ilegales (meds, bloqueada hasta desbloquear)
@@ -1001,7 +1211,8 @@ class PantallaTienda(_MenuVertical):
 # C o E en el teléfono del local lo abre/cierra.
 # ---------------------------------------------------------
 class PantallaCelular:
-    APPS = ["Comidas", "Insumos", "Mapa", "Mensajes", "Red", "Ventas"]
+    APPS = ["Comidas", "Insumos", "Mapa", "Mensajes", "Red", "Ventas",
+            "Personal"]
     IDS_COMIDA    = ["ing6", "ing12"]
     # Ya no se compran medicamentos hechos: se compran los insumos
     # y se fabrica en el sótano del local
@@ -1023,6 +1234,7 @@ class PantallaCelular:
         ("Mensajes", ( 30, 140,  75)),
         ("Red",      (110,  60, 150)),
         ("Ventas",   (170, 130, 30)),
+        ("Personal", ( 55, 110, 85)),
     ]
 
     def __init__(self):
@@ -1057,7 +1269,9 @@ class PantallaCelular:
     def manejar_evento(self, evento, economia, tratos, reloj, red,
                        gestor, arbol=None, app_ventas=None):
         """→ "cerrar" | ("pedido", id) | ("aceptar", t) |
-           ("rechazar", t) | ("pagar_soborno", ev) | None"""
+           ("rechazar", t) | ("pagar_soborno", ev) |
+           ("contratar_mozo",) | ("contratar_chef",) |
+           ("contratar_repositor",) | None"""
         if evento.type == pygame.KEYDOWN:
             if evento.key == pygame.K_c:
                 return "cerrar"                  # C siempre cierra
@@ -1081,6 +1295,8 @@ class PantallaCelular:
                 return self._ev_red(evento, economia, red)
             elif self.app == 5:
                 return self._ev_ventas(evento, arbol, app_ventas)
+            elif self.app == 6:
+                return self._ev_personal(evento, economia)
         elif evento.type == pygame.MOUSEBUTTONDOWN and evento.button == 1:
             if self.en_home:
                 for i, r in enumerate(self._rects_home):
@@ -1106,6 +1322,8 @@ class PantallaCelular:
                         self._colocar_vendedor(economia, red)
                     elif self.app == 5:
                         self._alternar_venta(arbol, app_ventas)
+                    elif self.app == 6:
+                        return self._contratar(economia)
         elif evento.type == pygame.MOUSEMOTION:
             if self.en_home:
                 for i, r in enumerate(self._rects_home):
@@ -1206,6 +1424,52 @@ class PantallaCelular:
         else:
             self.mensaje = f"{nombre}: retirado del catálogo."
             self.color_mensaje = COLOR_TEXTO_SUAVE
+
+    def _ev_personal(self, evento, economia):
+        """App Personal: W/S elige empleado, E/Enter lo contrata.
+        El pago real lo hace main.py al recibir la acción."""
+        n = 3
+        self.seleccion %= n
+        if evento.key in (pygame.K_w, pygame.K_UP):
+            self.seleccion = (self.seleccion - 1) % n
+        elif evento.key in (pygame.K_s, pygame.K_DOWN):
+            self.seleccion = (self.seleccion + 1) % n
+        elif evento.key in (pygame.K_RETURN, pygame.K_e, pygame.K_SPACE):
+            return self._contratar(economia)
+        return None
+
+    def _contratar(self, economia):
+        """Valida la contratación del empleado elegido. Devuelve
+        ("contratar_mozo",) / ("contratar_chef",) /
+        ("contratar_repositor",) o None con mensaje."""
+        # (nombre, ya contratado, requisito cumplido, mensaje si
+        # falta el requisito, precio, acción)
+        puestos = [
+            ("mozo", economia.tiene_mozo, True, "",
+             PRECIO_MOZO, ("contratar_mozo",)),
+            ("chef", economia.tiene_chef, economia.tiene_mozo,
+             "Primero contratá al mozo.",
+             PRECIO_CHEF, ("contratar_chef",)),
+            ("repositor", economia.tiene_repositor, economia.tiene_chef,
+             "Primero contratá al chef.",
+             PRECIO_REPOSITOR, ("contratar_repositor",)),
+        ]
+        (nombre, contratado, habilitado, falta,
+         precio, accion) = puestos[self.seleccion % len(puestos)]
+        if not habilitado:
+            self.mensaje = falta
+            self.color_mensaje = COLOR_ERROR
+        elif contratado:
+            self.mensaje = f"El {nombre} ya trabaja para vos."
+            self.color_mensaje = COLOR_TEXTO_SUAVE
+        elif economia.dinero < precio:
+            self.mensaje = "No te alcanza."
+            self.color_mensaje = COLOR_ERROR
+        else:
+            self.mensaje = f"¡{nombre.capitalize()} contratado!"
+            self.color_mensaje = COLOR_DINERO
+            return accion
+        return None
 
     def _ev_lista(self, evento, economia, ids, es_comida):
         n = max(1, len(ids))
@@ -1331,7 +1595,7 @@ class PantallaCelular:
         total_w = TAM * 2 + GAP
         total_h = bloque_h * filas - GAP
         ox = pant.centerx - total_w // 2
-        oy = pant.centery - total_h // 2 + 10
+        oy = pant.centery - total_h // 2 + 16
 
         self._rects_home = []
         ofertas = sum(1 for t in tratos if t.estado == "oferta")
@@ -1406,6 +1670,13 @@ class PantallaCelular:
                 dolar = self.fuente_chica.render("$", True, (90, 65, 15))
                 sup.blit(dolar, (cx - dolar.get_width() // 2 + 3,
                                  cy - dolar.get_height() // 2))
+            elif i == 6:  # Personal: empleado con delantal
+                pygame.draw.circle(sup.raw, (235, 220, 200), (cx, cy - 10), 7)
+                torso = pygame.Rect(cx - 10, cy - 1, 20, 18)
+                pygame.draw.rect(sup.raw, (235, 220, 200), torso,
+                                 border_radius=6)
+                pygame.draw.rect(sup.raw, (210, 165, 80),
+                                 (cx - 5, cy + 3, 10, 14), border_radius=3)
 
             etq = self.fuente_chica.render(nombre, True, COLOR_TEXTO)
             sup.blit(etq, (rect.centerx - etq.get_width() // 2, rect.bottom + 4))
@@ -1431,6 +1702,8 @@ class PantallaCelular:
             self._app_red(sup, cont, economia, red)
         elif self.app == 5:
             self._app_ventas(sup, cont, economia, arbol, app_ventas)
+        elif self.app == 6:
+            self._app_personal(sup, cont, economia)
         else:
             self._app_mensajes(sup, cont, tratos, reloj, gestor)
 
@@ -1778,6 +2051,96 @@ class PantallaCelular:
                 self.mensaje, True, self.color_mensaje),
                 (zona.x + 8, zona.bottom - 20))
 
+    def _app_personal(self, sup, zona, economia):
+        """App Personal: contratar al personal del local. Cada
+        puesto se desbloquea con el anterior trabajando:
+        Mozo → Chef → Repositor."""
+        sup.blit(self.fuente_titulo.render("Personal del local",
+                                           True, COLOR_ORO),
+                 (zona.x + 10, zona.y + 4))
+        plata = self.fuente_chica.render(f"$ {economia.dinero}",
+                                         True, COLOR_DINERO)
+        sup.blit(plata, (zona.right - plata.get_width() - 10,
+                         zona.bottom - 24))
+
+        empleados = [
+            ("Mozo", PRECIO_MOZO, economia.tiene_mozo, True,
+             "Atiende la fila solo",
+             f"Comisión: {round(COMISION_MOZO * 100)}% de cada venta",
+             ""),
+            ("Chef", PRECIO_CHEF, economia.tiene_chef,
+             economia.tiene_mozo,
+             "Cocina cuando hay fila",
+             f"Sueldo: ${SUELDO_CHEF}/tanda",
+             "Requiere Mozo"),
+            ("Repositor", PRECIO_REPOSITOR, economia.tiene_repositor,
+             economia.tiene_chef,
+             "Lleva los ingredientes al chef",
+             f"Sueldo: ${SUELDO_REPOSITOR}/caja",
+             "Requiere Chef"),
+        ]
+        self._rects_items = []
+        y = zona.y + 44
+        for i, (nombre, precio, contratado, disponible,
+                desc, sueldo, requisito) in enumerate(empleados):
+            r = pygame.Rect(zona.x + 6, y, zona.width - 12, 92)
+            self._rects_items.append(r)
+            elegido = i == self.seleccion % len(empleados)
+            pygame.draw.rect(sup.raw,
+                             (36, 38, 48) if elegido else (24, 26, 34),
+                             r, border_radius=8)
+            if elegido:
+                pygame.draw.rect(sup.raw, COLOR_APP_ACTIVA, r, 1,
+                                 border_radius=8)
+            # La casilla de contratado ([✓] / [►] / [ ])
+            caja = pygame.Rect(r.x + 8, r.y + 8, 16, 16)
+            pygame.draw.rect(sup.raw, (18, 20, 26), caja, border_radius=4)
+            pygame.draw.rect(sup.raw,
+                             COLOR_DINERO if contratado else COLOR_TEXTO_SUAVE,
+                             caja, 1, border_radius=4)
+            if contratado:
+                pygame.draw.line(sup.raw, COLOR_DINERO,
+                                 (caja.x + 3, caja.centery),
+                                 (caja.centerx - 1, caja.bottom - 4), 2)
+                pygame.draw.line(sup.raw, COLOR_DINERO,
+                                 (caja.centerx - 1, caja.bottom - 4),
+                                 (caja.right - 3, caja.y + 3), 2)
+            elif disponible:
+                pygame.draw.polygon(sup.raw, COLOR_ORO,
+                                    [(caja.x + 5, caja.y + 4),
+                                     (caja.x + 11, caja.centery),
+                                     (caja.x + 5, caja.bottom - 4)])
+            color_n = (COLOR_TEXTO if contratado or disponible
+                       else COLOR_TEXTO_SUAVE)
+            sup.blit(self.fuente_chica.render(nombre, True, color_n),
+                     (r.x + 32, r.y + 7))
+            if contratado:
+                etq = self.fuente_chica.render("ACTIVO", True, COLOR_DINERO)
+            else:
+                etq = self.fuente_chica.render(
+                    f"${precio}", True,
+                    COLOR_DINERO if disponible else COLOR_TEXTO_SUAVE)
+            sup.blit(etq, (r.right - etq.get_width() - 10, r.y + 7))
+            color_d = (COLOR_TEXTO_SUAVE if contratado or disponible
+                       else (100, 100, 110))
+            sup.blit(self.fuente_chica.render(desc, True, color_d),
+                     (r.x + 32, r.y + 30))
+            sup.blit(self.fuente_chica.render(sueldo, True, color_d),
+                     (r.x + 32, r.y + 50))
+            if not contratado and not disponible:
+                sup.blit(self.fuente_mini.render(
+                    requisito, True, COLOR_ERROR),
+                    (r.x + 32, r.y + 72))
+            y += 98
+
+        sup.blit(self.fuente_mini.render(
+            "E — contratar  ·  si matan al empleado, perdés la contratación",
+            True, COLOR_TEXTO_SUAVE), (zona.x + 8, zona.bottom - 40))
+        if self.mensaje:
+            sup.blit(self.fuente_chica.render(
+                self.mensaje, True, self.color_mensaje),
+                (zona.x + 8, zona.bottom - 24))
+
     def _app_mensajes(self, sup, zona, tratos, reloj, gestor=None):
         sup.blit(self.fuente_titulo.render("Mensajes", True, COLOR_ORO),
                  (zona.x + 10, zona.y + 4))
@@ -2033,92 +2396,515 @@ class PantallaVendedor(_MenuVertical):
 # mesa y laboratorio — son props físicos del cuarto y se usan
 # directo con E al acercarse (la lógica vive en main.py).
 # ---------------------------------------------------------
-class PantallaEstante:
+# ---------------------------------------------------------
+# Grillas arrastrables (Fase 15): la base común de todas las
+# pantallas de contenedores — inventario del jugador, baúl
+# del vehículo, estante del sótano (y cualquier caja futura).
+# Cada panel es una grilla de slots del Inventario posicional
+# (inventory.py); el mouse agarra un stack (click derecho o
+# Shift = media pila), lo arrastra con el ícono pegado al
+# cursor y lo suelta en otro slot: mover / apilar / permutar.
+# El teclado sigue andando: WASD elige slot, E usa/mueve.
+# ---------------------------------------------------------
+TAM_SLOT = 52
+SEP_SLOT = 8
+
+
+def _dibujar_caja_slot(superficie, rect, borde=COLOR_SLOT_BORDE,
+                       grosor=1, alpha=235):
+    caja = pygame.Surface(rect.size, pygame.SRCALPHA)
+    caja.fill((*COLOR_SLOT, alpha))
+    superficie.blit(caja, rect)
+    pygame.draw.rect(superficie.raw, borde, rect, grosor)
+
+
+class _PanelGrilla:
+    """Una grilla visible de un Inventario: título, layout de rects,
+    regla de admisión (`acepta(id_item) -> (ok, mensaje)`) y tope
+    opcional de unidades (`tope(id_item) -> cuántas entran aún`)."""
+
+    def __init__(self, titulo, inventario, x, y, acepta=None,
+                 tope=None, tam=TAM_SLOT):
+        self.titulo = titulo
+        self.inventario = inventario
+        self.x, self.y = x, y
+        self.acepta = acepta
+        self.tope = tope
+        self.tam = tam
+        self.rects = []
+        cols = inventario.columnas
+        for i in range(len(inventario.slots)):
+            self.rects.append(pygame.Rect(
+                x + (i % cols) * (tam + SEP_SLOT),
+                y + (i // cols) * (tam + SEP_SLOT), tam, tam))
+
+    def ancho(self):
+        cols = self.inventario.columnas
+        return cols * self.tam + (cols - 1) * SEP_SLOT
+
+    def admite(self, id_item):
+        return self.acepta(id_item) if self.acepta else (True, "")
+
+
+class _PantallaGrillas:
+    """Base de las pantallas con paneles arrastrables. Las subclases
+    arman los paneles en _layout() y definen las acciones de teclado;
+    acá vive el drag & drop, la selección y el dibujo de los slots."""
+
     def __init__(self):
         self.fuente_titulo = FuenteUI(52)
-        self.fuente_chica = FuenteUI(24)
+        self.fuente = FuenteUI(26)
+        self.fuente_chica = FuenteUI(21)
         self.mensaje = ""
-        self.color_mensaje = COLOR_TEXTO
-        self.lado = 0          # 0 = lo que llevás · 1 = el estante
-        self.sel = 0
+        self.mouse = (ANCHO_VENTANA // 2, ALTO_VENTANA // 2)
+        # Drag en curso: {"panel": i, "idx": j, "cantidad": n|None}.
+        # El stack NO sale del slot hasta soltarlo (así cancelar es
+        # gratis): el origen se dibuja atenuado mientras tanto.
+        self.drag = None
+        self.sel = 0          # índice dentro de _zonas
+        self.paneles = []
+        # Zonas seleccionables: slots de los paneles + los contadores
+        # fijos de la subclase. {"rect", "panel", "idx", "id", ...}
+        self._zonas = []
 
     def abrir(self):
-        self.lado = 0
-        self.sel = 0
         self.mensaje = ""
+        self.drag = None
+        self.sel = 0
 
-    def _guardables(self, economia):
-        """Lo que se puede dejar en el estante (el celular y el
-        arma van siempre encima)."""
-        return [s for s in economia.inventario.stacks
-                if s[0] not in ("celular", "arma")]
+    # -- armado (las subclases llenan paneles/zonas cada evento) --
+    def _armar_zonas(self, extras=()):
+        """Slots de todos los paneles + zonas fijas no arrastrables."""
+        self._zonas = []
+        for p_i, panel in enumerate(self.paneles):
+            for idx, rect in enumerate(panel.rects):
+                self._zonas.append({"rect": rect, "panel": p_i,
+                                    "idx": idx})
+        self._zonas.extend(extras)
+        if self._zonas:
+            self.sel = min(self.sel, len(self._zonas) - 1)
+
+    def _zona_en(self, pos):
+        for i, zona in enumerate(self._zonas):
+            if zona["rect"].collidepoint(pos):
+                return i
+        return None
+
+    def _stack_de(self, zona):
+        """El stack del slot de esa zona (None si vacía o si es un
+        contador fijo)."""
+        if zona.get("panel") is None:
+            return None
+        return self.paneles[zona["panel"]].inventario.obtener(zona["idx"])
+
+    def _zona_sel(self):
+        return self._zonas[self.sel] if self._zonas else None
+
+    # -- drag & drop --
+    def _evento_mouse(self, evento):
+        """Maneja el mouse del drag & drop. True si consumió el
+        evento (para que la subclase no lo procese de nuevo)."""
+        if evento.type == pygame.MOUSEMOTION:
+            self.mouse = evento.pos
+            if self.drag is None:
+                lugar = self._zona_en(evento.pos)
+                if lugar is not None:
+                    self.sel = lugar
+            return False
+        if evento.type == pygame.MOUSEBUTTONDOWN and evento.button in (1, 3):
+            self.mouse = evento.pos
+            lugar = self._zona_en(evento.pos)
+            if lugar is None:
+                return False
+            zona = self._zonas[lugar]
+            self.sel = lugar
+            stack = self._stack_de(zona)
+            if stack is None:
+                return False   # slot vacío o contador fijo: no se agarra
+            mitad = (evento.button == 3
+                     or pygame.key.get_mods() & pygame.KMOD_SHIFT)
+            self.drag = {"panel": zona["panel"], "idx": zona["idx"],
+                         "cantidad": max(1, stack[1] // 2) if mitad
+                         else None}
+            return True
+        if evento.type == pygame.MOUSEBUTTONUP and evento.button in (1, 3):
+            self.mouse = evento.pos
+            if self.drag is not None:
+                self._soltar(evento.pos)
+                return True
+        return False
+
+    def _soltar(self, pos):
+        drag, self.drag = self.drag, None
+        origen = self.paneles[drag["panel"]]
+        stack = origen.inventario.obtener(drag["idx"])
+        lugar = self._zona_en(pos)
+        if stack is None or lugar is None:
+            return   # fuera de todo slot: queda donde estaba
+        zona = self._zonas[lugar]
+        if zona.get("panel") is None:
+            return   # los contadores fijos no reciben ítems
+        destino = self.paneles[zona["panel"]]
+        if destino is not origen:
+            ok, mensaje = destino.admite(stack[0])
+            if not ok:
+                self.mensaje = mensaje
+                return
+            if destino.tope is not None:
+                # Tope de unidades: entra lo que entra, el resto
+                # queda en el origen
+                lugar_libre = destino.tope(stack[0])
+                if lugar_libre <= 0:
+                    self.mensaje = "Ahí no entra más."
+                    return
+                pedido = drag["cantidad"] or stack[1]
+                drag["cantidad"] = min(pedido, lugar_libre)
+        if mover_stack(origen.inventario, drag["idx"],
+                       destino.inventario, zona["idx"],
+                       drag["cantidad"]):
+            self.sel = lugar
+            self.mensaje = ""
+
+    def _cancelar_drag(self):
+        """ESC durante el arrastre: el stack nunca salió del origen."""
+        estaba = self.drag is not None
+        self.drag = None
+        return estaba
+
+    # -- selección con teclado (geométrica: sirve para cualquier
+    #    disposición de paneles y contadores) --
+    def _mover_sel(self, dx, dy):
+        if not self._zonas:
+            return
+        actual = self._zonas[self.sel]["rect"]
+        cx, cy = actual.center
+        mejor, mejor_costo = None, None
+        for i, zona in enumerate(self._zonas):
+            if i == self.sel:
+                continue
+            ox, oy = zona["rect"].center
+            avance = (ox - cx) * dx + (oy - cy) * dy
+            if avance <= 0:
+                continue   # queda para el otro lado
+            desvio = abs((ox - cx) * dy) + abs((oy - cy) * dx)
+            costo = avance + desvio * 3
+            if mejor_costo is None or costo < mejor_costo:
+                mejor, mejor_costo = i, costo
+        if mejor is not None:
+            self.sel = mejor
+
+    def _evento_teclado_sel(self, evento):
+        """Navegación WASD/flechas. True si movió la selección."""
+        teclas = {pygame.K_a: (-1, 0), pygame.K_LEFT: (-1, 0),
+                  pygame.K_d: (1, 0), pygame.K_RIGHT: (1, 0),
+                  pygame.K_w: (0, -1), pygame.K_UP: (0, -1),
+                  pygame.K_s: (0, 1), pygame.K_DOWN: (0, 1)}
+        if evento.key in teclas:
+            self._mover_sel(*teclas[evento.key])
+            return True
+        return False
+
+    # -- dibujo --
+    def _dibujar_paneles(self, superficie, economia):
+        hover = self._zona_en(self.mouse) if self.drag is not None else None
+        for p_i, panel in enumerate(self.paneles):
+            if panel.titulo:
+                img = self.fuente_chica.render(panel.titulo, True, COLOR_ORO)
+                superficie.blit(img, (panel.x, panel.y - 24))
+            for idx, rect in enumerate(panel.rects):
+                stack = panel.inventario.obtener(idx)
+                self._dibujar_slot(superficie, economia, p_i, idx, rect,
+                                   stack, hover)
+
+    def _dibujar_slot(self, superficie, economia, p_i, idx, rect,
+                      stack, hover):
+        zona_i = self._indice_zona(p_i, idx)
+        elegido = zona_i == self.sel and self.drag is None
+        es_origen = (self.drag is not None
+                     and self.drag["panel"] == p_i
+                     and self.drag["idx"] == idx)
+        borde, grosor = COLOR_SLOT_BORDE, 1
+        if elegido:
+            borde, grosor = COLOR_SLOT_SEL, 2
+        if self.drag is not None and hover is not None \
+                and self._zonas[hover].get("panel") == p_i \
+                and self._zonas[hover]["idx"] == idx:
+            # Highlight del destino: dorado si el drop vale, rojo si no
+            borde, grosor = self._color_destino(p_i), 2
+        alpha = 110 if stack is None else 235
+        _dibujar_caja_slot(superficie, rect, borde, grosor, alpha)
+        if stack is None:
+            return
+        dibujar_icono(superficie, self._icono_de(stack[0], economia),
+                      rect, economia)
+        if stack[0] not in ITEMS_SIEMPRE_ENCIMA:
+            img = self.fuente_chica.render(str(stack[1]), True, COLOR_TEXTO)
+            superficie.blit(img, (rect.right - img.get_width() - 4,
+                                  rect.bottom - img.get_height() - 3))
+        if es_origen:
+            # El stack que se está arrastrando queda atenuado en origen
+            velo = pygame.Surface(rect.size, pygame.SRCALPHA)
+            velo.fill((*COLOR_SLOT, 170))
+            superficie.blit(velo, rect)
+
+    def _color_destino(self, panel_destino):
+        drag = self.drag
+        origen = self.paneles[drag["panel"]]
+        destino = self.paneles[panel_destino]
+        stack = origen.inventario.obtener(drag["idx"])
+        if stack is not None and destino is not origen:
+            ok, _ = destino.admite(stack[0])
+            if not ok:
+                return COLOR_ERROR
+            if destino.tope is not None and destino.tope(stack[0]) <= 0:
+                return COLOR_ERROR
+        return COLOR_SLOT_SEL
+
+    def _indice_zona(self, p_i, idx):
+        for i, zona in enumerate(self._zonas):
+            if zona.get("panel") == p_i and zona["idx"] == idx:
+                return i
+        return None
+
+    @staticmethod
+    def _icono_de(id_item, economia):
+        return id_item
+
+    def _dibujar_drag(self, superficie, economia):
+        """El ícono pegado al mouse, por encima de todo."""
+        if self.drag is None:
+            return
+        stack = self.paneles[self.drag["panel"]].inventario.obtener(
+            self.drag["idx"])
+        if stack is None:
+            self.drag = None
+            return
+        cantidad = self.drag["cantidad"] or stack[1]
+        rect = pygame.Rect(0, 0, TAM_SLOT, TAM_SLOT)
+        rect.center = (int(self.mouse[0]), int(self.mouse[1]))
+        dibujar_icono(superficie, self._icono_de(stack[0], economia),
+                      rect, economia)
+        if stack[0] not in ITEMS_SIEMPRE_ENCIMA:
+            img = self.fuente_chica.render(str(cantidad), True, COLOR_ORO)
+            superficie.blit(img, (rect.right - img.get_width() - 2,
+                                  rect.bottom - img.get_height() - 2))
+
+
+class PantallaEstante(_PantallaGrillas):
+    """El estante del sótano: dos grillas lado a lado (lo que llevás
+    / lo guardado) con drag & drop cruzado. E mueve de a uno, como
+    siempre. El Chef sigue leyendo del mismo estante: no le importa
+    cómo se acomode."""
+
+    def _layout(self, economia, sotano):
+        inv = economia.inventario
+        est = sotano.estante
+        ancho_inv = (inv.columnas * TAM_SLOT
+                     + (inv.columnas - 1) * SEP_SLOT)
+        self.paneles = [
+            _PanelGrilla("LLEVÁS ENCIMA", inv, 150, 190),
+            _PanelGrilla("EN EL ESTANTE", est,
+                         ANCHO_VENTANA - 150 - ancho_inv, 190,
+                         acepta=self._acepta_estante),
+        ]
+        self._armar_zonas()
+
+    @staticmethod
+    def _acepta_estante(id_item):
+        if id_item in ITEMS_SIEMPRE_ENCIMA:
+            return False, "Eso va siempre encima."
+        return True, ""
 
     def manejar_evento(self, evento, economia, sotano):
+        self._layout(economia, sotano)
+        if self._evento_mouse(evento):
+            return None
         if evento.type != pygame.KEYDOWN:
             return None
         if evento.key == pygame.K_ESCAPE:
+            if self._cancelar_drag():
+                return None
             return "cerrar"
-        lista = (self._guardables(economia) if self.lado == 0
-                 else sotano.estante.stacks)
-        if evento.key in (pygame.K_a, pygame.K_LEFT,
-                          pygame.K_d, pygame.K_RIGHT):
-            self.lado = 1 - self.lado
-            self.sel = 0
-        elif evento.key in (pygame.K_w, pygame.K_UP) and lista:
-            self.sel = (self.sel - 1) % len(lista)
-        elif evento.key in (pygame.K_s, pygame.K_DOWN) and lista:
-            self.sel = (self.sel + 1) % len(lista)
-        elif evento.key in (pygame.K_RETURN, pygame.K_e, pygame.K_SPACE) \
-                and lista:
-            id_item = lista[self.sel % len(lista)][0]
+        if self._evento_teclado_sel(evento):
+            return None
+        if evento.key in (pygame.K_RETURN, pygame.K_e, pygame.K_SPACE):
+            zona = self._zona_sel()
+            stack = self._stack_de(zona) if zona else None
+            if stack is None:
+                return None
+            id_item = stack[0]
             nombre = NOMBRE_ITEM.get(id_item, id_item)
-            if self.lado == 0:
-                sotano.guardar(economia.inventario, id_item)
-                self.mensaje = f"Guardaste 1 {nombre}."
-            else:
-                sotano.retirar(economia.inventario, id_item)
+            if zona["panel"] == 0:
+                if id_item in ITEMS_SIEMPRE_ENCIMA:
+                    self.mensaje = "Eso va siempre encima."
+                elif sotano.guardar(economia.inventario, id_item):
+                    self.mensaje = f"Guardaste 1 {nombre}."
+                else:
+                    self.mensaje = "El estante está lleno."
+            elif sotano.retirar(economia.inventario, id_item):
                 self.mensaje = f"Retiraste 1 {nombre}."
-            self.color_mensaje = COLOR_DINERO
         return None
 
     def dibujar(self, superficie, economia, sotano):
+        self._layout(economia, sotano)
         velo = _panel(ANCHO_VENTANA, ALTO_VENTANA, alpha=185)
         superficie.blit(velo, (0, 0))
         titulo = self.fuente_titulo.render("EL ESTANTE", True, COLOR_ORO)
-        superficie.blit(titulo, ((ANCHO_VENTANA - titulo.get_width()) // 2, 60))
+        superficie.blit(titulo, ((ANCHO_VENTANA - titulo.get_width()) // 2, 46))
         sub = self.fuente_chica.render(
             "Lo guardado queda en el sótano, a salvo de arrestos.",
             True, COLOR_TEXTO_SUAVE)
-        superficie.blit(sub, ((ANCHO_VENTANA - sub.get_width()) // 2, 112))
+        superficie.blit(sub, ((ANCHO_VENTANA - sub.get_width()) // 2, 96))
 
-        columnas = [("LLEVÁS ENCIMA", self._guardables(economia), 0),
-                    ("EN EL ESTANTE", sotano.estante.stacks, 1)]
-        for titulo_col, lista, lado in columnas:
-            x = 200 if lado == 0 else 560
-            activo = lado == self.lado
-            img = self.fuente_chica.render(
-                titulo_col, True, COLOR_ORO if activo else COLOR_TEXTO_SUAVE)
-            superficie.blit(img, (x, 160))
-            if not lista:
-                superficie.blit(self.fuente_chica.render(
-                    "(vacío)", True, COLOR_TEXTO_SUAVE), (x, 192))
-            for i, (id_item, cantidad) in enumerate(lista[:9]):
-                elegido = activo and i == self.sel % len(lista)
-                nombre = NOMBRE_ITEM.get(id_item, id_item)
-                img = self.fuente_chica.render(
-                    f"{'▶ ' if elegido else '  '}{nombre}  x{cantidad}",
-                    True, COLOR_ORO if elegido else COLOR_TEXTO)
-                superficie.blit(img, (x, 192 + i * 26))
+        self._dibujar_paneles(superficie, economia)
 
+        zona = self._zona_sel()
+        stack = self._stack_de(zona) if zona else None
+        if stack is not None:
+            nombre = NOMBRE_ITEM.get(stack[0], stack[0])
+            img = self.fuente.render(f"{nombre}  x{stack[1]}",
+                                     True, COLOR_TEXTO)
+            superficie.blit(img, ((ANCHO_VENTANA - img.get_width()) // 2,
+                                  ALTO_VENTANA - 92))
         if self.mensaje:
-            img = self.fuente_chica.render(self.mensaje, True,
-                                           self.color_mensaje)
-            superficie.blit(img, ((ANCHO_VENTANA - img.get_width()) // 2, 452))
+            img = self.fuente_chica.render(self.mensaje, True, COLOR_DINERO)
+            superficie.blit(img, ((ANCHO_VENTANA - img.get_width()) // 2,
+                                  ALTO_VENTANA - 60))
         pie = self.fuente_chica.render(
-            "A/D — lado  ·  W/S — elegir  ·  E — mover 1  ·  ESC — salir",
+            "Arrastrá con el mouse (click der. — media pila)  ·  "
+            "WASD + E — mover 1  ·  ESC — salir",
             True, COLOR_TEXTO_SUAVE)
         superficie.blit(pie, ((ANCHO_VENTANA - pie.get_width()) // 2,
-                              ALTO_VENTANA - 56))
+                              ALTO_VENTANA - 30))
+        self._dibujar_drag(superficie, economia)
+
+
+class PantallaContenedor(_PantallaGrillas):
+    """Pantalla genérica de dos paneles con drag & drop: lo que
+    llevás a la izquierda, un contenedor cualquiera a la derecha.
+    Sirve para el contenedor de ingredientes del Chef y para
+    cualquier caja/baúl fijo del mapa que se agregue después.
+    `solo_items` restringe qué entra; `tope_unidades` limita el
+    total (lo que no entra queda en tu mano)."""
+
+    def __init__(self, titulo, subtitulo="", solo_items=None,
+                 tope_unidades=None):
+        super().__init__()
+        self.titulo = titulo
+        self.subtitulo = subtitulo
+        self.solo_items = solo_items
+        self.tope_unidades = tope_unidades
+        self._contenedor = None   # lo fija _layout en cada evento
+
+    def _acepta(self, id_item):
+        if id_item in ITEMS_SIEMPRE_ENCIMA:
+            return False, "Eso va siempre encima."
+        if self.solo_items and id_item not in self.solo_items:
+            nombres = ", ".join(NOMBRE_ITEM.get(i, i).lower()
+                                for i in self.solo_items)
+            return False, f"Acá solo van {nombres}."
+        return True, ""
+
+    def _tope(self, id_item):
+        """Cuántas unidades entran todavía (None = sin tope)."""
+        if self.tope_unidades is None:
+            return None
+        total = sum(s[1] for s in self._contenedor.stacks)
+        return self.tope_unidades - total
+
+    def _layout(self, economia, contenedor):
+        self._contenedor = contenedor
+        inv = economia.inventario
+        ancho_inv = (inv.columnas * TAM_SLOT
+                     + (inv.columnas - 1) * SEP_SLOT)
+        titulo_c = "ADENTRO"
+        if self.tope_unidades is not None:
+            total = sum(s[1] for s in contenedor.stacks)
+            titulo_c += f"  ({total}/{self.tope_unidades})"
+        self.paneles = [
+            _PanelGrilla("LLEVÁS ENCIMA", inv, 150, 190),
+            _PanelGrilla(titulo_c, contenedor,
+                         ANCHO_VENTANA - 150 - ancho_inv, 190,
+                         acepta=self._acepta,
+                         tope=(None if self.tope_unidades is None
+                               else self._tope)),
+        ]
+        self._armar_zonas()
+
+    def manejar_evento(self, evento, economia, contenedor):
+        self._layout(economia, contenedor)
+        if self._evento_mouse(evento):
+            return None
+        if evento.type != pygame.KEYDOWN:
+            return None
+        if evento.key == pygame.K_ESCAPE:
+            if self._cancelar_drag():
+                return None
+            return "cerrar"
+        if self._evento_teclado_sel(evento):
+            return None
+        if evento.key in (pygame.K_RETURN, pygame.K_e, pygame.K_SPACE):
+            self._mover_uno(economia, contenedor)
+        return None
+
+    def _mover_uno(self, economia, contenedor):
+        """E: pasa 1 unidad del stack elegido al otro lado."""
+        zona = self._zona_sel()
+        stack = self._stack_de(zona) if zona else None
+        if stack is None:
+            return
+        id_item = stack[0]
+        nombre = NOMBRE_ITEM.get(id_item, id_item)
+        if zona["panel"] == 0:
+            ok, mensaje = self._acepta(id_item)
+            if not ok:
+                self.mensaje = mensaje
+                return
+            lugar_libre = self._tope(id_item)
+            if lugar_libre is not None and lugar_libre <= 0:
+                self.mensaje = "Ahí no entra más."
+                return
+            if contenedor.agregar(id_item, 1):
+                economia.inventario.quitar(id_item, 1)
+                self.mensaje = f"Dejaste 1 {nombre}."
+            else:
+                self.mensaje = "No hay lugar."
+        elif contenedor.quitar(id_item, 1):
+            economia.inventario.agregar(id_item, 1)
+            self.mensaje = f"Sacaste 1 {nombre}."
+
+    def dibujar(self, superficie, economia, contenedor):
+        self._layout(economia, contenedor)
+        velo = _panel(ANCHO_VENTANA, ALTO_VENTANA, alpha=185)
+        superficie.blit(velo, (0, 0))
+        titulo = self.fuente_titulo.render(self.titulo, True, COLOR_ORO)
+        superficie.blit(titulo, ((ANCHO_VENTANA - titulo.get_width()) // 2, 46))
+        if self.subtitulo:
+            sub = self.fuente_chica.render(self.subtitulo, True,
+                                           COLOR_TEXTO_SUAVE)
+            superficie.blit(sub, ((ANCHO_VENTANA - sub.get_width()) // 2, 96))
+
+        self._dibujar_paneles(superficie, economia)
+
+        zona = self._zona_sel()
+        stack = self._stack_de(zona) if zona else None
+        if stack is not None:
+            nombre = NOMBRE_ITEM.get(stack[0], stack[0])
+            img = self.fuente.render(f"{nombre}  x{stack[1]}",
+                                     True, COLOR_TEXTO)
+            superficie.blit(img, ((ANCHO_VENTANA - img.get_width()) // 2,
+                                  ALTO_VENTANA - 92))
+        if self.mensaje:
+            img = self.fuente_chica.render(self.mensaje, True, COLOR_DINERO)
+            superficie.blit(img, ((ANCHO_VENTANA - img.get_width()) // 2,
+                                  ALTO_VENTANA - 60))
+        pie = self.fuente_chica.render(
+            "Arrastrá con el mouse (click der. — media pila)  ·  "
+            "WASD + E — mover 1  ·  ESC — salir",
+            True, COLOR_TEXTO_SUAVE)
+        superficie.blit(pie, ((ANCHO_VENTANA - pie.get_width()) // 2,
+                              ALTO_VENTANA - 30))
+        self._dibujar_drag(superficie, economia)
 
 
 # ---------------------------------------------------------
@@ -2890,21 +3676,14 @@ class PantallaArbolMedicamentos:
 # grilla de módulos con descripciones. Desde acá también se
 # come un sanguche o se cambia de arma (E sobre el ítem).
 # ---------------------------------------------------------
-class PantallaInventario:
-    COLUMNAS = 5
-    FILAS = 3
-    TAM = 64
+class PantallaInventario(_PantallaGrillas):
+    """El inventario grande (tecla O): la grilla del jugador con
+    drag & drop y, si hay vehículo con baúl, la grilla del baúl al
+    lado — se arrastra de una a la otra. Los contadores (comida,
+    efectivo, banco, puntos, receta) no son ítems físicos: van en
+    una franja fija abajo, seleccionables pero no arrastrables."""
 
-    def __init__(self):
-        self.fuente_titulo = FuenteUI(52)
-        self.fuente = FuenteUI(26)
-        self.fuente_chica = FuenteUI(21)
-        self.sel = 0
-        self.mensaje = ""
-        self._rects = []
-
-    def abrir(self):
-        self.mensaje = ""
+    TAM_CONTADOR = 44
 
     # Descripción de cada ítem apilable (el arma se arma aparte)
     DESCRIPCIONES = {
@@ -2921,67 +3700,131 @@ class PantallaInventario:
         "compuestos": ("Insumo: se cocinan en el laboratorio del "
                        "sótano."),
         "planta": "Cosecha de la maceta. Planta + ziploc = med natural.",
+        "maceta": ("Mueble: tecla del hotbar para colocarla donde "
+                   "apuntás. X frente a ella (vacía) la levanta."),
+        "mesa_lab": ("Mueble: tecla del hotbar para colocarla donde "
+                     "apuntás. X frente a ella (vacía) la levanta."),
     }
 
-    def _items(self, economia, jugador):
-        """(id, nombre, cantidad, descripción): primero los stacks del
-        inventario dinámico EN SU ORDEN, después el estado fijo
-        (comida del local, plata, banco, puntos)."""
-        items = []
-        for id_item, cantidad in economia.inventario.stacks:
-            if id_item == "arma":
-                estado_arma = ("equipada — E para guardarla"
-                               if economia.arma_equipada
-                               else "guardada — E para equiparla")
-                items.append(("arma", "Pistola", None,
-                              f"Tu arma. Está {estado_arma}."))
-                continue
-            nombre = NOMBRE_ITEM.get(id_item, id_item.capitalize())
-            mostrar = None if id_item == "celular" else cantidad
-            items.append((id_item, nombre, mostrar,
-                          self.DESCRIPCIONES.get(id_item, "")))
-        items += [
-            ("comida", "Comida", economia.producto,
-             f"Platos listos (calidad {round(economia.calidad * 100)}%). "
+    def _contadores(self, economia):
+        """La franja fija de abajo: contadores, no ítems físicos.
+        (id, cantidad a mostrar, descripción)."""
+        contadores = [
+            ("comida", economia.producto,
+             f"Comida — platos listos (calidad "
+             f"{round(economia.calidad * 100)}%). "
              "Se venden en el mostrador."),
-            ("efectivo", "Efectivo", economia.dinero,
-             "La plata del bolsillo: se pierde en arrestos y muertes."),
-            ("banco", "Banco", economia.banco,
-             "Plata a salvo de multas y pérdidas."),
-            ("puntos", "Puntos", economia.puntos,
+            ("efectivo", economia.dinero,
+             "Efectivo — la plata del bolsillo: se pierde en "
+             "arrestos y muertes."),
+            ("banco", economia.banco,
+             "Banco — plata a salvo de multas y pérdidas."),
+            ("puntos", economia.puntos,
              "Puntos de habilidad — se gastan en el árbol (T)."),
         ]
         if economia.receta_especial:
-            items.append(("receta", "Receta especial", None,
-                          "La receta del Proveedor: platos premium."))
-        return items
+            contadores.append(
+                ("receta", None,
+                 "Receta especial — la del Proveedor: platos premium."))
+        return contadores
+
+    def _layout(self, economia, jugador):
+        inv = economia.inventario
+        ancho_inv = (inv.columnas * TAM_SLOT
+                     + (inv.columnas - 1) * SEP_SLOT)
+        y0 = 130
+        if economia.vehiculo:
+            x_inv = 120
+            datos_v = VEHICULOS[economia.vehiculo]
+            lugares = datos_v["baul"]
+            titulo_b = (f"BAÚL — {datos_v['nombre']}"
+                        + ("" if lugares else " (la moto no tiene baúl)"))
+            ancho_baul = (economia.baul.columnas * TAM_SLOT
+                          + (economia.baul.columnas - 1) * SEP_SLOT)
+            self.paneles = [
+                _PanelGrilla("LLEVÁS ENCIMA", inv, x_inv, y0),
+                _PanelGrilla(titulo_b, economia.baul,
+                             ANCHO_VENTANA - 120 - ancho_baul, y0,
+                             acepta=self._acepta_baul),
+            ]
+        else:
+            x_inv = (ANCHO_VENTANA - ancho_inv) // 2
+            self.paneles = [_PanelGrilla("LLEVÁS ENCIMA", inv, x_inv, y0)]
+
+        # Los contadores, en fila debajo de la grilla del jugador
+        alto_inv = (inv.filas_visibles() * (TAM_SLOT + SEP_SLOT)
+                    - SEP_SLOT)
+        extras = []
+        y_c = y0 + alto_inv + 18
+        for k, (id_item, cuenta, desc) in \
+                enumerate(self._contadores(economia)):
+            rect = pygame.Rect(
+                x_inv + k * (self.TAM_CONTADOR + SEP_SLOT), y_c,
+                self.TAM_CONTADOR, self.TAM_CONTADOR)
+            extras.append({"rect": rect, "panel": None, "idx": k,
+                           "id": id_item, "cuenta": cuenta,
+                           "desc": desc})
+        self._armar_zonas(extras)
+
+    @staticmethod
+    def _acepta_baul(id_item):
+        if id_item in ITEMS_SIEMPRE_ENCIMA:
+            return False, "Eso va siempre encima."
+        return True, ""
+
+    @staticmethod
+    def _icono_de(id_item, economia):
+        if id_item == "arma" and not economia.tiene_pistola:
+            return "punos"
+        return id_item
+
+    def _descripcion(self, zona, economia):
+        """Nombre + descripción de lo seleccionado (o ""). """
+        if zona is None:
+            return ""
+        if zona.get("panel") is None:
+            return zona["desc"]
+        stack = self._stack_de(zona)
+        if stack is None:
+            return ""
+        id_item = stack[0]
+        if id_item == "arma":
+            estado_arma = ("equipada — E para guardarla"
+                           if economia.arma_equipada
+                           else "guardada — E para equiparla")
+            return f"Pistola — tu arma. Está {estado_arma}."
+        nombre = NOMBRE_ITEM.get(id_item, id_item.capitalize())
+        if zona["panel"] == 1:
+            nombre_v = VEHICULOS[economia.vehiculo]["nombre"]
+            return (f"{nombre} — en el baúl de tu {nombre_v}. "
+                    "B — pasarlo a tu mano.")
+        desc = self.DESCRIPCIONES.get(id_item, "")
+        return f"{nombre} — {desc}" if desc else nombre
 
     def manejar_evento(self, evento, economia, jugador):
-        """Devuelve "cerrar", ("comer_sanguche",), ("alternar_arma",)
-        o None."""
-        items = self._items(economia, jugador)
-        if evento.type == pygame.KEYDOWN:
-            if evento.key in (pygame.K_ESCAPE, pygame.K_o):
-                return "cerrar"
-            if evento.key in (pygame.K_a, pygame.K_LEFT):
-                self.sel = (self.sel - 1) % len(items)
-            elif evento.key in (pygame.K_d, pygame.K_RIGHT):
-                self.sel = (self.sel + 1) % len(items)
-            elif evento.key in (pygame.K_w, pygame.K_UP):
-                self.sel = (self.sel - self.COLUMNAS) % len(items)
-            elif evento.key in (pygame.K_s, pygame.K_DOWN):
-                self.sel = (self.sel + self.COLUMNAS) % len(items)
-            elif evento.key in (pygame.K_RETURN, pygame.K_e, pygame.K_SPACE):
-                return self._usar(items[self.sel][0])
-        elif evento.type == pygame.MOUSEMOTION:
-            for i, rect in enumerate(self._rects):
-                if rect.collidepoint(evento.pos):
-                    self.sel = i
-        elif evento.type == pygame.MOUSEBUTTONDOWN and evento.button == 1:
-            for i, rect in enumerate(self._rects):
-                if rect.collidepoint(evento.pos):
-                    self.sel = i
-                    return self._usar(items[i][0])
+        """Devuelve "cerrar", ("comer_sanguche",), ("alternar_arma",),
+        ("baul_guardar", id), ("baul_sacar", id) o None."""
+        self._layout(economia, jugador)
+        if self._evento_mouse(evento):
+            return None
+        if evento.type != pygame.KEYDOWN:
+            return None
+        if evento.key in (pygame.K_ESCAPE, pygame.K_o):
+            if self._cancelar_drag():
+                return None
+            return "cerrar"
+        if self._evento_teclado_sel(evento):
+            return None
+        zona = self._zona_sel()
+        stack = self._stack_de(zona) if zona else None
+        if evento.key in (pygame.K_RETURN, pygame.K_e, pygame.K_SPACE):
+            if stack is not None and zona["panel"] == 0:
+                return self._usar(stack[0])
+        elif evento.key == pygame.K_b and stack is not None:
+            # B: mover el stack seleccionado hacia/desde el baúl
+            if zona["panel"] == 1:
+                return ("baul_sacar", stack[0])
+            return ("baul_guardar", stack[0])
         return None
 
     def _usar(self, id_item):
@@ -2992,6 +3835,7 @@ class PantallaInventario:
         return None
 
     def dibujar(self, superficie, economia, jugador):
+        self._layout(economia, jugador)
         velo = _panel(ANCHO_VENTANA, ALTO_VENTANA, alpha=185)
         superficie.blit(velo, (0, 0))
         titulo = self.fuente_titulo.render("INVENTARIO", True, COLOR_ORO)
@@ -3001,54 +3845,45 @@ class PantallaInventario:
             True, COLOR_TEXTO_SUAVE)
         superficie.blit(vida, ((ANCHO_VENTANA - vida.get_width()) // 2, 68))
 
-        items = self._items(economia, jugador)
-        self.sel = min(self.sel, len(items) - 1)
-        self._rects = []
-        sep = 10
-        ancho_total = self.COLUMNAS * self.TAM + (self.COLUMNAS - 1) * sep
-        x0 = (ANCHO_VENTANA - ancho_total) // 2
-        y0 = 96
-        for i, (id_item, nombre, cuenta, _) in enumerate(items):
-            col = i % self.COLUMNAS
-            fila = i // self.COLUMNAS
-            rect = pygame.Rect(x0 + col * (self.TAM + sep),
-                               y0 + fila * (self.TAM + sep + 16),
-                               self.TAM, self.TAM)
-            self._rects.append(rect)
-            elegido = i == self.sel
-            caja = pygame.Surface(rect.size, pygame.SRCALPHA)
-            caja.fill((*COLOR_SLOT, 235))
-            superficie.blit(caja, rect)
-            pygame.draw.rect(superficie.raw,
-                             COLOR_SLOT_SEL if elegido else COLOR_SLOT_BORDE,
-                             rect, 2 if elegido else 1)
-            icono = id_item
-            if id_item == "arma" and not economia.tiene_pistola:
-                icono = "punos"
-            dibujar_icono(superficie, icono, rect, economia)
-            if cuenta is not None:
-                texto = f"${cuenta}" if id_item in ("efectivo", "banco") \
-                    else str(cuenta)
-                img = self.fuente_chica.render(texto, True, COLOR_TEXTO)
-                superficie.blit(img, (rect.right - img.get_width() - 4,
-                                      rect.bottom - img.get_height() - 3))
-            # Nombre debajo del módulo
-            img = self.fuente_chica.render(nombre, True,
-                                           COLOR_ORO if elegido else COLOR_TEXTO_SUAVE)
-            superficie.blit(img, (rect.centerx - img.get_width() // 2,
-                                  rect.bottom + 2))
+        self._dibujar_paneles(superficie, economia)
+        self._dibujar_contadores(superficie, economia)
 
-        # Descripción del ítem seleccionado
-        desc = items[self.sel][3]
-        img = self.fuente.render(desc, True, COLOR_TEXTO)
-        superficie.blit(img, ((ANCHO_VENTANA - img.get_width()) // 2,
-                              ALTO_VENTANA - 84))
+        # Descripción de lo seleccionado
+        desc = self._descripcion(self._zona_sel(), economia)
+        if desc:
+            img = self.fuente.render(desc, True, COLOR_TEXTO)
+            superficie.blit(img, ((ANCHO_VENTANA - img.get_width()) // 2,
+                                  ALTO_VENTANA - 84))
         if self.mensaje:
             img = self.fuente_chica.render(self.mensaje, True, COLOR_DINERO)
             superficie.blit(img, ((ANCHO_VENTANA - img.get_width()) // 2,
                                   ALTO_VENTANA - 56))
+        ayuda_baul = "  ·  B — al/del baúl" if economia.vehiculo else ""
         pie = self.fuente_chica.render(
-            "Mouse o WASD  ·  E — usar  ·  O/ESC — cerrar",
+            "Arrastrá con el mouse (click der. — media pila)  ·  "
+            f"WASD + E — usar{ayuda_baul}  ·  O/ESC — cerrar",
             True, COLOR_TEXTO_SUAVE)
         superficie.blit(pie, ((ANCHO_VENTANA - pie.get_width()) // 2,
                               ALTO_VENTANA - 28))
+        self._dibujar_drag(superficie, economia)
+
+    def _dibujar_contadores(self, superficie, economia):
+        """La franja de contadores: slots fijos, sin drag."""
+        for zona in self._zonas:
+            if zona.get("panel") is not None:
+                continue
+            rect = zona["rect"]
+            elegido = (self._zonas[self.sel] is zona
+                       and self.drag is None)
+            _dibujar_caja_slot(superficie, rect,
+                               COLOR_SLOT_SEL if elegido
+                               else COLOR_SLOT_BORDE,
+                               2 if elegido else 1, alpha=200)
+            dibujar_icono(superficie, zona["id"], rect, economia)
+            if zona["cuenta"] is not None:
+                texto = (f"${zona['cuenta']}"
+                         if zona["id"] in ("efectivo", "banco")
+                         else str(zona["cuenta"]))
+                img = self.fuente_chica.render(texto, True, COLOR_TEXTO)
+                superficie.blit(img, (rect.right - img.get_width() - 4,
+                                      rect.bottom - img.get_height() - 3))

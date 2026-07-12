@@ -17,7 +17,7 @@
 
 import pygame
 
-from .settings import ANCHO_VENTANA, ALTO_VENTANA
+from .settings import ANCHO_VENTANA, ALTO_VENTANA, CAMARA_SUAVIZADO
 
 
 class Camara:
@@ -30,11 +30,14 @@ class Camara:
         # Offset = esquina superior izquierda de la "ventana" sobre el mundo
         self.offset = pygame.Vector2(0, 0)
 
-    def actualizar(self, rect_objetivo):
-        """Centra la cámara en el objetivo (normalmente el jugador),
-        clampeada a los límites de SU zona (ciudad o subsuelo)."""
-        self.offset.x = rect_objetivo.centerx - ANCHO_VENTANA // 2
-        self.offset.y = rect_objetivo.centery - ALTO_VENTANA // 2
+    def actualizar(self, rect_objetivo, dt=None, adelanto=(0, 0)):
+        """Sigue al objetivo (normalmente el jugador), clampeada a los
+        límites de SU zona (ciudad o subsuelo). Con `dt` el seguimiento
+        es suave (lerp, estilo GTA); sin `dt` salta seco — es lo que
+        quieren los teleports. `adelanto` corre el punto de mira, p.ej.
+        hacia donde viaja el auto para ver venir las esquinas."""
+        destino_x = rect_objetivo.centerx + adelanto[0] - ANCHO_VENTANA // 2
+        destino_y = rect_objetivo.centery + adelanto[1] - ALTO_VENTANA // 2
 
         if self.y_subsuelo is None:
             y_min, y_max = 0, self.alto_mapa
@@ -46,8 +49,20 @@ class Camara:
             y_min, y_max = 0, self.y_subsuelo
 
         # Clamp: no mostrar más allá de los bordes de la zona
-        self.offset.x = max(0, min(self.offset.x, self.ancho_mapa - ANCHO_VENTANA))
-        self.offset.y = max(y_min, min(self.offset.y, y_max - ALTO_VENTANA))
+        destino_x = max(0, min(destino_x, self.ancho_mapa - ANCHO_VENTANA))
+        destino_y = max(y_min, min(destino_y, y_max - ALTO_VENTANA))
+
+        # Un destino a más de una pantalla es un teleport (sótano,
+        # reaparición): ahí el lerp haría un paneo larguísimo por
+        # todo el mapa, mejor saltar seco.
+        salto = (abs(destino_x - self.offset.x) > ANCHO_VENTANA
+                 or abs(destino_y - self.offset.y) > ALTO_VENTANA)
+        if dt is None or salto:
+            self.offset.update(destino_x, destino_y)
+        else:
+            t = 1 - CAMARA_SUAVIZADO ** dt
+            self.offset.x += (destino_x - self.offset.x) * t
+            self.offset.y += (destino_y - self.offset.y) * t
 
     def aplicar(self, rect):
         """Convierte un rect en coordenadas de mundo a coordenadas

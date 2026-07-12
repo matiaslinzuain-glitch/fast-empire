@@ -17,6 +17,9 @@ import random
 
 import pygame
 
+from .economy import INGREDIENTES_POR_TANDA, MAX_CONTENEDOR
+from .map import POSICIONES_FILA
+from .settings import COLOR_CAJA, COLOR_CAJA_CINTA
 from .sprites import paleta_peaton, paleta_encapuchado, dibujar_personaje
 
 VELOCIDAD_PEATON = 85        # px/s, más lento que Walter
@@ -283,3 +286,193 @@ class CompradorIlegal(_Peaton):
     def dibujar(self, superficie, camara):
         dibujar_personaje(superficie, camara.aplicar(self.rect),
                           self.paleta, self)
+
+
+class MozoNPC(_Peaton):
+    """El empleado del mostrador (se contrata en la app Personal).
+    Vive clavado detrás del mostrador y atiende la fila solo: cuando
+    el primero de la cola llega a su lugar y hay comida lista, tras
+    un momento devuelve "servido" y main.py concreta la venta
+    (y le descuenta el sueldo a Walter)."""
+
+    COLOR_DELANTAL = (210, 165, 80)   # amarillo mostaza
+    SEGUNDOS_SERVIR = 1.2             # delay visual antes de servir
+
+    def __init__(self):
+        super().__init__(0, 0, self.COLOR_DELANTAL)
+        # Su puesto: el frente de la fila, corrido detrás del
+        # mostrador (que no parezca un cliente más)
+        self.rect.center = (round(POSICIONES_FILA[0][0] - 20),
+                            round(POSICIONES_FILA[0][1]))
+        self.pos.update(self.rect.topleft)
+        self.estado = "parado"   # parado | sirviendo
+        self._timer_servir = 0.0
+
+    def irse(self):
+        pass   # un empleado no abandona el puesto (ni herido)
+
+    def actualizar(self, dt, fila, producto_disponible):
+        """Devuelve "servido" en el frame en que atendió al primero
+        de la fila; si no hay a quién o qué servir, espera parado."""
+        if (fila and producto_disponible > 0
+                and fila[0].listo_para_atender(POSICIONES_FILA[0])):
+            self.estado = "sirviendo"
+            self._timer_servir += dt
+            if self._timer_servir >= self.SEGUNDOS_SERVIR:
+                self._timer_servir = 0.0
+                return "servido"
+        else:
+            self.estado = "parado"
+            self._timer_servir = 0.0
+        return None
+
+    def dibujar(self, superficie, camara):
+        dibujar_personaje(superficie, camara.aplicar(self.rect),
+                          self.paleta, self)
+
+
+class ChefNPC(_Peaton):
+    """El cocinero del local (requiere Mozo). Se para al lado de los
+    hornos y, cuando hay fila y el contenedor tiene ingredientes,
+    pone una tanda CLÁSICA al fuego (la receta especial es solo de
+    Walter). Nunca toca el inventario de Walter: cocina únicamente
+    con lo que haya en el contenedor."""
+
+    COLOR_DELANTAL = (200, 90, 60)    # rojo ladrillo
+    SEGUNDOS_VAIVEN = 0.8             # vaivén cosmético de ±3 px
+
+    def __init__(self, x, y):
+        super().__init__(x, y, self.COLOR_DELANTAL)
+        self.rect.center = (round(x), round(y))
+        self.pos.update(self.rect.topleft)
+        self.estado = "idle"   # idle | cocinando
+        self._timer_vaiven = 0.0
+        self._vaiven_abajo = False
+
+    def irse(self):
+        pass   # clavado a sus hornos
+
+    def actualizar(self, dt, produccion, economia, len_fila):
+        """Devuelve "inicio_cocina" en el frame en que puso una tanda
+        al fuego (los ingredientes salen del contenedor acá mismo)."""
+        self._timer_vaiven += dt
+        if self._timer_vaiven >= self.SEGUNDOS_VAIVEN:
+            self._timer_vaiven = 0.0
+            self._vaiven_abajo = not self._vaiven_abajo
+        if produccion.en_curso:
+            self.estado = "cocinando"
+            return None
+        self.estado = "idle"
+        if (economia.contenedor_ing >= INGREDIENTES_POR_TANDA
+                and len_fila > 0):
+            economia.contenedor_ing -= INGREDIENTES_POR_TANDA
+            produccion.iniciar_chef()
+            return "inicio_cocina"
+        return None
+
+    def dibujar(self, superficie, camara):
+        r = camara.aplicar(self.rect).move(
+            0, 3 if self._vaiven_abajo else 0)
+        dibujar_personaje(superficie, r, self.paleta, self)
+        if self.estado == "cocinando":
+            # Burbuja de vapor sobre la olla
+            vapor = pygame.Surface((8, 8), pygame.SRCALPHA)
+            vapor.fill((255, 255, 255, 178))
+            superficie.blit(vapor, (r.centerx - 4, r.y - 10))
+
+
+class RepositorNPC(_Peaton):
+    """El repositor del local (requiere Chef). Espera al lado del
+    contenedor y, cuando llega a la puerta una caja de SOLO
+    ingredientes, sale a buscarla y la vuelca en el contenedor del
+    Chef. Las cajas con insumos químicos (ziploc, semillas,
+    compuestos) no las toca: esas son cosa de Walter. Entra y sale
+    siempre por la puerta, como los clientes. Cobra por caja."""
+
+    COLOR_DELANTAL = (80, 125, 170)   # celeste de repartidor
+
+    def __init__(self, puesto, puerta):
+        super().__init__(puesto[0], puesto[1], self.COLOR_DELANTAL)
+        self.rect.center = (round(puesto[0]), round(puesto[1]))
+        self.pos.update(self.rect.topleft)
+        self.puesto = pygame.Vector2(puesto)
+        self.puerta = pygame.Vector2(puerta)
+        # esperando | yendo (a la caja) | volviendo (al contenedor)
+        # | descargando (volcando lo que traía, si el contenedor
+        # se llenó espera parado a que el Chef haga lugar)
+        self.estado = "esperando"
+        self.caja = None       # la caja que fue a buscar
+        self.carga = 0         # ingredientes en brazos
+        self._cruzo_puerta = False
+
+    def irse(self):
+        pass   # empleado: no abandona el puesto
+
+    @staticmethod
+    def _es_de_ingredientes(caja):
+        return set(caja.contenido) == {"ingredientes"}
+
+    def _elegir_caja(self, cajas, economia):
+        """La primera caja de ingredientes cuyo contenido entra
+        ENTERO en el contenedor (así nunca se pierde nada)."""
+        for caja in cajas:
+            if not self._es_de_ingredientes(caja):
+                continue
+            total = sum(caja.contenido.values())
+            if economia.contenedor_ing + total <= MAX_CONTENEDOR:
+                return caja
+        return None
+
+    def actualizar(self, dt, cajas, economia):
+        """Devuelve "entrega" en el frame en que llega al contenedor
+        con una caja (main.py le paga el sueldo ahí)."""
+        if self.estado == "esperando":
+            self.caja = self._elegir_caja(cajas, economia)
+            if self.caja is not None:
+                self.estado = "yendo"
+                self._cruzo_puerta = False
+
+        elif self.estado == "yendo":
+            if self.caja not in cajas:
+                # Walter la levantó primero: media vuelta
+                self.caja = None
+                self.estado = "volviendo"
+                self._cruzo_puerta = False
+            elif not self._cruzo_puerta:
+                if self._avanzar_hacia(self.puerta, dt) < 10:
+                    self._cruzo_puerta = True
+            elif self._avanzar_hacia(self.caja.rect.center, dt) < 12:
+                self.carga = sum(self.caja.contenido.values())
+                cajas.remove(self.caja)
+                self.caja = None
+                self.estado = "volviendo"
+                self._cruzo_puerta = False
+
+        elif self.estado == "volviendo":
+            if not self._cruzo_puerta:
+                if self._avanzar_hacia(self.puerta, dt) < 10:
+                    self._cruzo_puerta = True
+            elif self._avanzar_hacia(self.puesto, dt) < 8:
+                if self.carga > 0:
+                    self.estado = "descargando"
+                    return "entrega"
+                self.estado = "esperando"
+
+        elif self.estado == "descargando":
+            lugar = MAX_CONTENEDOR - economia.contenedor_ing
+            puesto = min(lugar, self.carga)
+            economia.contenedor_ing += puesto
+            self.carga -= puesto
+            if self.carga <= 0:
+                self.estado = "esperando"
+        return None
+
+    def dibujar(self, superficie, camara):
+        r = camara.aplicar(self.rect)
+        dibujar_personaje(superficie, r, self.paleta, self)
+        # La caja en brazos mientras la lleva
+        if self.carga > 0:
+            caja = pygame.Rect(r.x + 1, r.y + 9, 16, 11)
+            pygame.draw.rect(superficie, COLOR_CAJA, caja)
+            pygame.draw.rect(superficie, COLOR_CAJA_CINTA,
+                             (caja.centerx - 1, caja.y, 3, caja.height))
