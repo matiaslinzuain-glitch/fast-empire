@@ -1266,6 +1266,10 @@ class PantallaCelular:
     # y se fabrica en el sótano del local
     IDS_ILEGALES  = ["ziploc10", "semillas4", "comp4",
                      "compant2", "compsue1"]
+    # Cada insumo aparece en la app recién cuando el árbol de I+D
+    # enseñó el medicamento que lo usa (ziploc: siempre).
+    REQ_INSUMO = {"semillas4": "med_nat",   "comp4": "med_quim",
+                  "compant2":  "med_quim2", "compsue1": "med_quim3"}
 
     # Portrait (apps 0, 1, 3)
     ANCHO_TEL = 300
@@ -1314,6 +1318,13 @@ class PantallaCelular:
         """El mapa (app 2) gira el celular a horizontal."""
         return (not self.en_home) and self.app == 2
 
+    def ids_insumos(self, arbol):
+        """Los insumos comprables según lo investigado en el árbol."""
+        return [i for i in self.IDS_ILEGALES
+                if self.REQ_INSUMO.get(i) is None
+                or (arbol is not None
+                    and arbol.desbloqueado(self.REQ_INSUMO[i]))]
+
     # ── eventos ────────────────────────────────────────────
     def manejar_evento(self, evento, economia, tratos, reloj, red,
                        gestor, arbol=None, app_ventas=None):
@@ -1337,7 +1348,8 @@ class PantallaCelular:
                                       self.IDS_COMIDA, es_comida=True)
             elif self.app == 1:
                 return self._ev_lista(evento, economia,
-                                      self.IDS_ILEGALES, es_comida=False)
+                                      self.ids_insumos(arbol),
+                                      es_comida=False)
             elif self.app == 3:
                 return self._ev_mensajes(evento, tratos, gestor)
             elif self.app == 4:
@@ -1364,7 +1376,8 @@ class PantallaCelular:
                                              self.IDS_COMIDA, True)
                     if self.app == 1:
                         return self._comprar(economia,
-                                             self.IDS_ILEGALES, False)
+                                             self.ids_insumos(arbol),
+                                             False)
                     if self.app == 3:
                         return self._activar_mensaje(tratos, gestor)
                     if self.app == 4:
@@ -1746,7 +1759,7 @@ class PantallaCelular:
                             "Comidas", self.IDS_COMIDA, True)
         elif self.app == 1:
             self._app_lista(sup, cont, economia,
-                            "Insumos", self.IDS_ILEGALES, False)
+                            "Insumos", self.ids_insumos(arbol), False)
         elif self.app == 4:
             self._app_red(sup, cont, economia, red)
         elif self.app == 5:
