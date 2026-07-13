@@ -170,9 +170,12 @@ PORCENTAJE_MULTA = 0.25          # arresto: 25% del dinero + meds confiscados
 PORCENTAJE_PERDIDA_MUERTE = 0.40 # muerte: 40% del dinero + meds perdidos
 
 # --- Puntos de habilidad (el árbol llega en la Fase 5) ---
-PUNTOS_POR_VENTA = 0   # las ventas de comida ya no dan XP: hay que vender meds
-PUNTOS_POR_RIVAL = 3   # era 5
-PUNTOS_POR_ESCAPE = 1  # era 2
+# La comida TIENE que dar algo de XP: el primer nodo del árbol de
+# I+D cuesta 100 y sin esto no hay forma de arrancar el negocio
+# (no podés vender meds sin investigar ni investigar sin vender).
+PUNTOS_POR_VENTA = 1
+PUNTOS_POR_RIVAL = 3
+PUNTOS_POR_ESCAPE = 1
 
 # A partir de cuánto facturado en negro los rivales te atacan
 UMBRAL_AMENAZA_RIVALES = 150

@@ -33,8 +33,10 @@
 # =========================================================
 
 # --- Curva de coste (el rebalanceo vive en estas dos líneas) ---
-COSTE_BASE = 150          # XP del primer nodo: prof1=150, prof2=450, prof3=1350
-MULT_EXPONENCIAL = 3.0    # crecimiento agresivo por nivel de profundidad
+# prof1=100, prof2=220, prof3=484, prof4=1065, prof5=2343:
+# exigente al fondo del árbol pero arrancar no es un suplicio.
+COSTE_BASE = 100          # XP del primer nodo de cada tronco
+MULT_EXPONENCIAL = 2.2    # crecimiento por nivel de profundidad
 
 
 def coste_nodo(profundidad):
@@ -50,27 +52,27 @@ def coste_nodo(profundidad):
 PRODUCTOS = {
     "med_nat": {
         "nombre": "Tintura de Hierbas", "plural": "naturales",
-        "rama": "natural", "tier": 1, "precio": 55, "xp_venta": 3,
+        "rama": "natural", "tier": 1, "precio": 55, "xp_venta": 5,
     },
     "med_nat2": {
         "nombre": "Extracto Botánico", "plural": "extractos botánicos",
-        "rama": "natural", "tier": 2, "precio": 150, "xp_venta": 8,
+        "rama": "natural", "tier": 2, "precio": 150, "xp_venta": 14,
     },
     "med_nat3": {
         "nombre": "Panacea Orgánica", "plural": "panaceas",
-        "rama": "natural", "tier": 3, "precio": 420, "xp_venta": 24,
+        "rama": "natural", "tier": 3, "precio": 420, "xp_venta": 40,
     },
     "med_quim": {
         "nombre": "Analgésico Sintético", "plural": "químicos",
-        "rama": "sintetico", "tier": 1, "precio": 95, "xp_venta": 5,
+        "rama": "sintetico", "tier": 1, "precio": 95, "xp_venta": 9,
     },
     "med_quim2": {
         "nombre": "Antiviral Complejo", "plural": "antivirales",
-        "rama": "sintetico", "tier": 2, "precio": 260, "xp_venta": 14,
+        "rama": "sintetico", "tier": 2, "precio": 260, "xp_venta": 24,
     },
     "med_quim3": {
         "nombre": "Suero Experimental", "plural": "sueros",
-        "rama": "sintetico", "tier": 3, "precio": 700, "xp_venta": 38,
+        "rama": "sintetico", "tier": 3, "precio": 700, "xp_venta": 65,
     },
 }
 

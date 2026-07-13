@@ -478,11 +478,15 @@ class HUD:
         """La barra rápida dinámica: los stacks del inventario en
         orden de llegada, cada uno con su "xN" abajo a la derecha.
         Ningún slot está reservado — al vaciarse un stack, los de
-        la derecha corren un lugar."""
+        la derecha corren un lugar. Al final se suma un slot de
+        SOLO LECTURA con la comida cocinada del mostrador (sin
+        número de tecla: no es un ítem que se "use")."""
         stacks = economia.inventario.stacks[:MAX_HOTBAR]
-        if not stacks:
+        hay_comida = economia.producto > 0
+        cajas = len(stacks) + (1 if hay_comida else 0)
+        if not cajas:
             return
-        total = len(stacks) * _SLOT + (len(stacks) - 1) * _SLOT_SEP
+        total = cajas * _SLOT + (cajas - 1) * _SLOT_SEP
         x = (ANCHO_VENTANA - total) // 2
         y = ALTO_VENTANA - _SLOT - 10
         for i, (id_item, cantidad) in enumerate(stacks):
@@ -517,6 +521,20 @@ class HUD:
                 aviso = self.fuente_chica.render(str(sin_leer), True, COLOR_TEXTO)
                 superficie.blit(aviso, (rect.right - 6 - aviso.get_width() // 2,
                                         rect.y + 1))
+
+        # Slot informativo de la comida lista (siempre a la derecha)
+        if hay_comida:
+            rect = pygame.Rect(x + len(stacks) * (_SLOT + _SLOT_SEP), y,
+                               _SLOT, _SLOT)
+            caja = pygame.Surface(rect.size, pygame.SRCALPHA)
+            caja.fill((*COLOR_SLOT[:3], 200))
+            superficie.blit(caja, rect)
+            pygame.draw.rect(superficie.raw, COLOR_ORO, rect, 1)
+            dibujar_icono(superficie, "comida", rect, economia)
+            img = self.fuente_chica.render(f"x{economia.producto}", True,
+                                           COLOR_TEXTO)
+            superficie.blit(img, (rect.right - img.get_width() - 3,
+                                  rect.bottom - img.get_height() - 2))
 
     def _barra_coccion(self, superficie, produccion):
         ancho, alto = 220, 16
@@ -900,18 +918,19 @@ class PantallaOpciones(_MenuVertical):
 # Menú de pausa (se dibuja sobre el juego congelado)
 # ---------------------------------------------------------
 class MenuPausa(_MenuVertical):
-    ACCIONES = ["Continuar", "guardar", "Pantalla completa",
+    ACCIONES = ["Continuar", "guardar", "Opciones", "Pantalla completa",
                 "debug", "Menú principal"]
 
     def __init__(self):
-        super().__init__(["Continuar", "Guardar partida", "Pantalla completa",
-                          "Modo debug: no", "Menú principal"])
+        super().__init__(["Continuar", "Guardar partida", "Opciones",
+                          "Pantalla completa", "Modo debug: no",
+                          "Menú principal"])
         self.fuente_titulo = FuenteUI(72)
         self.fuente_chica = FuenteUI(24)
         self.mensaje = ""
 
     def refrescar_debug(self, activo):
-        self.opciones[3] = f"Modo debug: {'sí' if activo else 'no'}"
+        self.opciones[4] = f"Modo debug: {'sí' if activo else 'no'}"
 
     def manejar_evento(self, evento):
         if evento.type == pygame.KEYDOWN and evento.key == pygame.K_ESCAPE:

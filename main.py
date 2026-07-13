@@ -342,6 +342,7 @@ class Juego:
                 self.estado = "partidas"
             elif accion == "Opciones":
                 self.opciones.refrescar(self.audio, self.pantalla_completa)
+                self.opciones_origen = "menu"
                 self.estado = "opciones"
             elif accion == "debug":
                 self._alternar_debug()
@@ -396,7 +397,8 @@ class Juego:
         elif self.estado == "opciones":
             accion = self.opciones.manejar_evento(evento)
             if accion == "volver":
-                self.estado = "menu"
+                # Vuelve a donde se abrió: menú principal o pausa
+                self.estado = getattr(self, "opciones_origen", "menu")
             elif accion == "sonido":
                 self.audio.ciclar_volumen()
             elif accion == "musica":
@@ -458,6 +460,10 @@ class Juego:
                 ok = self._guardar_partida()
                 self.pausa.mensaje = ("Partida guardada ✓" if ok
                                       else "No se pudo guardar")
+            elif accion == "Opciones":
+                self.opciones.refrescar(self.audio, self.pantalla_completa)
+                self.opciones_origen = "pausa"
+                self.estado = "opciones"
             elif accion == "Pantalla completa":
                 self._alternar_pantalla_completa()
             elif accion == "debug":
@@ -734,9 +740,16 @@ class Juego:
                 self.proveedor.irse()
         elif id_dialogo == "proveedor_mision":
             self.mision = self._generar_mision()
-            self.aviso = ("MISIÓN", self.mision["desc"]
-                          + f" — recompensa ${self.mision['recompensa']}")
-            self.aviso_timer = 3.2
+            if self.mision is not None:
+                self.aviso = ("MISIÓN", self.mision["desc"]
+                              + f" — recompensa ${self.mision['recompensa']}")
+                self.aviso_timer = 3.2
+            else:
+                # Nada investigado aún: no hay trabajo que dar
+                self.aviso = ("SIN TRABAJO",
+                              "Investigá una receta en el árbol (R) y vuelvo")
+                self.aviso_timer = 3.2
+                self.timer_oferta = random.uniform(45.0, 70.0)
             if self.proveedor is not None:
                 self.proveedor.irse()
         elif id_dialogo == "proveedor_receta":
@@ -751,26 +764,44 @@ class Juego:
     # Misiones del Proveedor
     # -----------------------------------------------------
     def _generar_mision(self):
-        """Arma una misión al azar según el estado del mundo."""
-        tipos = ["reparto", "quimicos"]
+        """Arma una misión al azar según el estado del mundo y lo
+        que el jugador YA SABE FABRICAR (árbol de I+D): el Proveedor
+        nunca pide vender algo que todavía no se puede hacer. Los
+        números escalan con el avance de la investigación (nivel).
+        Devuelve None si no hay ningún trabajo posible."""
+        productos = self.arbol_meds.productos_desbloqueados()
+        hay_quim = any(p.startswith("med_quim") for p in productos)
+        nivel = len(self.arbol_meds.comprados)  # nodos investigados
+        tipos = []
+        if productos:
+            tipos.append("reparto")
+        if hay_quim:
+            tipos.append("quimicos")
         zonas_vivas = [r.zona_id for r in self.rivales
                        if r.zona_id is not None]
         if zonas_vivas:
             tipos.append("limpieza")
+        if not tipos:
+            return None
         tipo = random.choice(tipos)
         if tipo == "reparto":
-            n = random.randint(3, 5)
+            n = random.randint(3, 5) + nivel // 3
             return {"tipo": tipo, "objetivo": n, "progreso": 0,
-                    "timer": 90 + 45 * n, "recompensa": 30 * n, "puntos": n,
+                    "timer": 90 + 45 * n,
+                    "recompensa": (30 + 8 * nivel) * n,
+                    "puntos": n + nivel,
                     "desc": f"Vendé {n} medicamentos en tratos"}
         if tipo == "quimicos":
-            n = random.randint(2, 4)
+            n = random.randint(2, 4) + nivel // 4
             return {"tipo": tipo, "objetivo": n, "progreso": 0,
-                    "timer": 90 + 50 * n, "recompensa": 55 * n, "puntos": 2 * n,
+                    "timer": 90 + 50 * n,
+                    "recompensa": (55 + 12 * nivel) * n,
+                    "puntos": 2 * n + nivel,
                     "desc": f"Vendé {n} medicamentos QUÍMICOS"}
         zona = random.choice(zonas_vivas)
         return {"tipo": "limpieza", "zona": zona, "objetivo": 1, "progreso": 0,
-                "timer": 150, "recompensa": 200, "puntos": 8,
+                "timer": 150, "recompensa": 200 + 15 * nivel,
+                "puntos": 8 + nivel,
                 "desc": f"Eliminá al matón de {nombre_zona(zona)}"}
 
     def _avanzar_mision(self, cantidad=1):
@@ -1050,7 +1081,9 @@ class Juego:
         if self.mision is not None:
             if self.mision["tipo"] == "reparto":
                 self._avanzar_mision(vendidas)
-            elif self.mision["tipo"] == "quimicos" and trato.tipo == "med_quim":
+            elif (self.mision["tipo"] == "quimicos"
+                    and trato.tipo.startswith("med_quim")):
+                # Cualquier tier sintético cuenta (T1, T2 o T3)
                 self._avanzar_mision(vendidas)
 
     # -----------------------------------------------------
