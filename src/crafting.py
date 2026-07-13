@@ -45,16 +45,56 @@ SEGUNDOS_LABORATORIO = 45.0   # cuánto tarda una cocinada química
 # vendible sin cocinar primero el crudo.
 RECETA_NATURAL = {"planta": 1, "ziploc": 1}
 RECETA_QUIMICO_MESA = {"quimico_crudo": 1, "ziploc": 1}
+# Cada químico T2/T3 lleva SU PROPIO compuesto (se compran en
+# la app Insumos): compuesto de antiviral → Antiviral, compuesto
+# de suero → Suero. Simple: 1 compuesto + 1 ziploc.
 RECETAS_MESA = [
     ("med_nat3",  {"planta": 3, "ziploc": 2}),
-    ("med_quim3", {"quimico_crudo": 4, "ziploc": 2}),
+    ("med_quim3", {"comp_suero": 1, "ziploc": 1}),
     ("med_nat2",  {"planta": 2, "ziploc": 1}),
-    ("med_quim2", {"quimico_crudo": 2, "ziploc": 1}),
+    ("med_quim2", {"comp_antiviral": 1, "ziploc": 1}),
     ("med_nat",   RECETA_NATURAL),
     ("med_quim",  RECETA_QUIMICO_MESA),
 ]
 
 LISTA = -1.0   # marca de "terminó: cosechalo"
+
+# Nombres legibles de los insumos, para mostrar recetas en la UI
+# (singular, plural)
+_NOMBRES_INSUMOS = {
+    "planta": ("planta", "plantas"),
+    "ziploc": ("ziploc", "ziploc"),
+    "quimico_crudo": ("químico crudo", "químicos crudos"),
+    "comp_antiviral": ("compuesto de antiviral",
+                       "compuestos de antiviral"),
+    "comp_suero": ("compuesto de suero", "compuestos de suero"),
+}
+
+
+def nombre_insumo(insumo, cantidad=1):
+    """Nombre legible de un insumo, en singular o plural."""
+    sing, plur = _NOMBRES_INSUMOS.get(insumo, (insumo, insumo))
+    return sing if cantidad == 1 else plur
+
+
+def receta_de(producto):
+    """La receta de la mesa para un producto, o None."""
+    for prod, receta in RECETAS_MESA:
+        if prod == producto:
+            return receta
+    return None
+
+
+def receta_texto(producto):
+    """La receta de la mesa en texto legible ("2 plantas + 1 ziploc"),
+    o None si el producto no se arma en la mesa. La usa la UI del
+    árbol de I+D para que el jugador sepa CÓMO fabricar lo que
+    acaba de investigar."""
+    receta = receta_de(producto)
+    if receta is None:
+        return None
+    return " + ".join(f"{n} {nombre_insumo(insumo, n)}"
+                      for insumo, n in receta.items())
 
 
 class Sotano:

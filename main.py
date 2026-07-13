@@ -1315,15 +1315,18 @@ class Juego:
     def _usar_mesa(self):
         """E frente a la mesa de armado. La mesa evalúa las recetas
         YA INVESTIGADAS (árbol de I+D, tecla R) contra el inventario
-        y arma la primera cubierta — el mejor tier primero."""
+        y arma la primera cubierta — el mejor tier primero. Cada
+        tier usa insumos distintos (los T2/T3 químicos llevan
+        compuesto avanzado), así que no hay ambigüedad."""
         producto = self.sotano.armar_en_mesa(self.economia.inventario,
                                              arbol=self.arbol_meds)
         if producto is not None:
             self.audio.reproducir("cocinado")
+            n = 2 if self.sotano.ultimo_doble else 1
             extra = (" — ¡sin gastar insumos!"
                      if self.sotano.ultimo_sin_insumos else "")
             self._texto_sobre_jugador(
-                f"+1 {PRODUCTOS[producto]['nombre']} embolsado{extra}",
+                f"+{n} {PRODUCTOS[producto]['nombre']} embolsado{extra}",
                 COLOR_DINERO)
         elif not self.arbol_meds.productos_desbloqueados():
             self._texto_sobre_jugador(
@@ -1331,7 +1334,7 @@ class Juego:
                 COLOR_ERROR)
         else:
             self._texto_sobre_jugador(
-                "La mesa pide: planta + ziploc, o químico crudo + ziploc",
+                "Te faltan insumos — las recetas están en el árbol (R)",
                 COLOR_ERROR)
 
     # -----------------------------------------------------
@@ -2337,6 +2340,8 @@ class Juego:
                                                  self.arbol_meds)
             stock = (f"(P:{self.economia.planta} "
                      f"Q:{self.economia.quimico_crudo} "
+                     f"A:{self.economia.inventario.cantidad('comp_antiviral')} "
+                     f"S:{self.economia.inventario.cantidad('comp_suero')} "
                      f"Z:{self.economia.ziploc})")
             if proximo is not None:
                 return f"E — Armar {PRODUCTOS[proximo]['nombre']} {stock}"

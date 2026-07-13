@@ -59,6 +59,8 @@ PEDIDOS = {
     "ziploc10":  ("Bolsas ziploc x10",      {"ziploc": 10},       40),
     "semillas4": ("Semillas x4",            {"semillas": 4},      70),
     "comp4": ("Compuestos químicos x4",     {"compuestos": 4},    120),
+    "compant2": ("Comp. de antiviral x2",   {"comp_antiviral": 2}, 180),
+    "compsue1": ("Compuesto de suero x1",   {"comp_suero": 1},     250),
 }
 
 # --- Venta ilegal: precio base por unidad en el punto ---
@@ -75,6 +77,8 @@ NOMBRE_ITEM = {
     "med_quim": "Med. químicos", "ziploc": "Bolsas ziploc",
     "semillas": "Semillas",      "compuestos": "Compuestos",
     "planta": "Plantas",         "quimico_crudo": "Químico crudo",
+    "comp_antiviral": "Comp. de antiviral",
+    "comp_suero": "Comp. de suero",
     "med_nat2": "Extractos botánicos", "med_nat3": "Panaceas",
     "med_quim2": "Antivirales",        "med_quim3": "Sueros",
     "maceta": "Maceta",  "mesa_lab": "Mesa de laboratorio",

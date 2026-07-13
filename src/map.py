@@ -549,8 +549,28 @@ class Mapa:
                     celdas[(col, fila)] = self.tmx.get_tile_image_by_gid(gid)
             if celdas:
                 self.capas_techo.append(celdas)
-        # Estado del fundido de los techos (255 = opacidad plena)
-        self._alpha_techos = 255.0
+        # Agrupar las celdas de techo en "edificios" (componentes
+        # conexas por vecindad): el fundido es POR EDIFICIO — solo se
+        # transparenta el techo que tapa al jugador, no todos.
+        self._grupo_techo = {}          # (col, fila) -> id de edificio
+        pendientes = set()
+        for celdas in self.capas_techo:
+            pendientes |= set(celdas.keys())
+        grupo = 0
+        while pendientes:
+            grupo += 1
+            frontera = [pendientes.pop()]
+            while frontera:
+                c, f = frontera.pop()
+                self._grupo_techo[(c, f)] = grupo
+                for vec in ((c + 1, f), (c - 1, f),
+                            (c, f + 1), (c, f - 1)):
+                    if vec in pendientes:
+                        pendientes.remove(vec)
+                        frontera.append(vec)
+        # Estado del fundido: alpha actual por edificio (solo figuran
+        # los que están fundiéndose; ausente = opacidad plena 255)
+        self._alpha_grupos = {}
         self._techos_scratch = None
         self._techos_tick = None
 
@@ -640,12 +660,22 @@ class Mapa:
                         return True
         return False
 
+    def _grupos_sobre(self, rect):
+        """Los ids de edificio cuyas celdas de techo cubren el rect."""
+        grupos = set()
+        for fila in range(rect.top // TILE, rect.bottom // TILE + 1):
+            for col in range(rect.left // TILE, rect.right // TILE + 1):
+                g = self._grupo_techo.get((col, fila))
+                if g is not None:
+                    grupos.add(g)
+        return grupos
+
     def dibujar_techos(self, superficie, camara, rect_jugador):
         """Dibuja las capas de techo POR ENCIMA de las entidades.
-        Mientras alguna celda tape al jugador la opacidad baja a
-        TECHO_ALPHA_OCULTO con un fundido suave, y vuelve a plena
-        al salir. El fundido lleva su propio reloj: no necesita el
-        dt del loop principal."""
+        El fundido es POR EDIFICIO: solo el techo que tapa al jugador
+        baja a TECHO_ALPHA_OCULTO con un fundido suave (y vuelve a
+        plena al salir); el resto queda opaco. El fundido lleva su
+        propio reloj: no necesita el dt del loop principal."""
         if not self.capas_techo:
             return
 
@@ -653,24 +683,21 @@ class Mapa:
         dt = (0.0 if self._techos_tick is None
               else min(0.1, (ticks - self._techos_tick) / 1000.0))
         self._techos_tick = ticks
-        objetivo = (TECHO_ALPHA_OCULTO if self.hay_techo_sobre(rect_jugador)
-                    else 255.0)
-        self._alpha_techos += ((objetivo - self._alpha_techos)
-                               * min(1.0, TECHO_VEL_FADE * dt))
-        alpha = int(self._alpha_techos)
 
-        # Con opacidad plena se blitea directo; atenuado, los tiles
-        # van a una superficie intermedia transparente que se pega
-        # entera con set_alpha (así el fundido es parejo aunque los
-        # tiles se solapen).
-        destino = superficie
-        if alpha < 254:
-            if (self._techos_scratch is None
-                    or self._techos_scratch.get_size() != superficie.get_size()):
-                self._techos_scratch = pygame.Surface(superficie.get_size(),
-                                                      pygame.SRCALPHA)
-            destino = self._techos_scratch
-            destino.fill((0, 0, 0, 0))
+        # Actualizar el alpha de cada edificio en fundido. Los que
+        # tapan al jugador tienden a TECHO_ALPHA_OCULTO; el resto
+        # vuelve a 255 y sale del diccionario al llegar.
+        bajo = self._grupos_sobre(rect_jugador)
+        for g in bajo:
+            self._alpha_grupos.setdefault(g, 255.0)
+        for g in list(self._alpha_grupos):
+            objetivo = TECHO_ALPHA_OCULTO if g in bajo else 255.0
+            a = self._alpha_grupos[g]
+            a += (objetivo - a) * min(1.0, TECHO_VEL_FADE * dt)
+            if g not in bajo and a >= 254.5:
+                del self._alpha_grupos[g]
+            else:
+                self._alpha_grupos[g] = a
 
         ox = round(camara.offset.x)
         oy = round(camara.offset.y)
@@ -680,17 +707,43 @@ class Mapa:
         fila_inicio = max(0, oy // TILE)
         fila_fin = min(self.filas,
                        (oy + superficie.get_height()) // TILE + 2)
+        # Tiles opacos directo al lienzo; los de edificios en fundido
+        # se juntan por edificio para pegarlos con su propio alpha.
+        fundidos = {}
         for celdas in self.capas_techo:
             for fila in range(fila_inicio, fila_fin):
                 y = fila * TILE - oy
                 for col in range(col_inicio, col_fin):
                     img = celdas.get((col, fila))
-                    if img is not None:
-                        destino.blit(img, (col * TILE - ox, y))
+                    if img is None:
+                        continue
+                    g = self._grupo_techo.get((col, fila))
+                    if g in self._alpha_grupos:
+                        fundidos.setdefault(g, []).append(
+                            (img, (col * TILE - ox, y)))
+                    else:
+                        superficie.blit(img, (col * TILE - ox, y))
 
-        if destino is not superficie:
-            destino.set_alpha(alpha)
-            superficie.blit(destino, (0, 0))
+        if not fundidos:
+            return
+        # Cada edificio en fundido va a una superficie intermedia
+        # transparente que se pega entera con set_alpha (así el
+        # fundido es parejo aunque los tiles se solapen).
+        if (self._techos_scratch is None
+                or self._techos_scratch.get_size() != superficie.get_size()):
+            self._techos_scratch = pygame.Surface(superficie.get_size(),
+                                                  pygame.SRCALPHA)
+        # macOS nuevos: el lienzo puede traer alfa 0 (formato de
+        # pantalla con canal alfa real); sin esto el blit de la
+        # capa copia crudo y la pantalla queda negra.
+        superficie.fill((0, 0, 0, 255),
+                        special_flags=pygame.BLEND_RGBA_MAX)
+        for g, tiles in fundidos.items():
+            self._techos_scratch.fill((0, 0, 0, 0))
+            for img, pos in tiles:
+                self._techos_scratch.blit(img, pos)
+            self._techos_scratch.set_alpha(int(self._alpha_grupos[g]))
+            superficie.blit(self._techos_scratch, (0, 0))
 
 
 class _DibujanteAscii:

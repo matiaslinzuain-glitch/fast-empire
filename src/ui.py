@@ -41,6 +41,7 @@ from .economy import (
     PRECIO_MOZO, PRECIO_CHEF, PRECIO_REPOSITOR,
     COMISION_MOZO, SUELDO_CHEF, SUELDO_REPOSITOR,
 )
+from .crafting import receta_texto
 from .inventory import mover as mover_stack
 from .skills import ARBOL
 from .skilltree import NODOS, PRODUCTOS
@@ -355,6 +356,24 @@ def dibujar_icono(superficie, id_item, rect, economia=None):
                             [(cx - 5, cy - 4), (cx + 5, cy - 4),
                              (cx + 9, cy + 8), (cx - 9, cy + 8)])
         pygame.draw.polygon(superficie.raw, (150, 90, 190),
+                            [(cx - 7, cy + 2), (cx + 7, cy + 2),
+                             (cx + 9, cy + 8), (cx - 9, cy + 8)])
+    elif id_item == "comp_antiviral":
+        # Frasco premium: líquido celeste y tapa dorada
+        pygame.draw.rect(superficie.raw, (240, 210, 80), (cx - 5, cy - 9, 10, 5))
+        pygame.draw.polygon(superficie.raw, (200, 210, 220),
+                            [(cx - 5, cy - 4), (cx + 5, cy - 4),
+                             (cx + 9, cy + 8), (cx - 9, cy + 8)])
+        pygame.draw.polygon(superficie.raw, (80, 200, 230),
+                            [(cx - 7, cy + 2), (cx + 7, cy + 2),
+                             (cx + 9, cy + 8), (cx - 9, cy + 8)])
+    elif id_item == "comp_suero":
+        # Frasco top: líquido rojo intenso y tapa dorada
+        pygame.draw.rect(superficie.raw, (240, 210, 80), (cx - 5, cy - 9, 10, 5))
+        pygame.draw.polygon(superficie.raw, (200, 210, 220),
+                            [(cx - 5, cy - 4), (cx + 5, cy - 4),
+                             (cx + 9, cy + 8), (cx - 9, cy + 8)])
+        pygame.draw.polygon(superficie.raw, (235, 80, 90),
                             [(cx - 7, cy + 2), (cx + 7, cy + 2),
                              (cx + 9, cy + 8), (cx - 9, cy + 8)])
     elif id_item == "planta":
@@ -1245,7 +1264,8 @@ class PantallaCelular:
     IDS_COMIDA    = ["ing6", "ing12"]
     # Ya no se compran medicamentos hechos: se compran los insumos
     # y se fabrica en el sótano del local
-    IDS_ILEGALES  = ["ziploc10", "semillas4", "comp4"]
+    IDS_ILEGALES  = ["ziploc10", "semillas4", "comp4",
+                     "compant2", "compsue1"]
 
     # Portrait (apps 0, 1, 3)
     ANCHO_TEL = 300
@@ -3457,6 +3477,10 @@ class PantallaArbolMedicamentos:
 
     def _investigar(self, economia, arbol):
         ok, mensaje = arbol.comprar(self.sel, economia)
+        if ok and NODOS[self.sel].desbloquea:
+            receta = receta_texto(NODOS[self.sel].desbloquea)
+            if receta:
+                mensaje += f"  ·  Receta: {receta} (mesa del sótano)"
         self.mensaje = mensaje
         self.color_mensaje = COLOR_DINERO if ok else COLOR_ERROR
 
@@ -3677,6 +3701,31 @@ class PantallaArbolMedicamentos:
                     True, COLOR_TEXTO_SUAVE),
                 (x + 12, y))
             y += 22
+            # La receta: que el jugador sepa CÓMO se fabrica
+            receta = receta_texto(nodo.desbloquea)
+            if receta:
+                y += 4
+                superficie.blit(
+                    self.fuente_desc.render(
+                        "RECETA — mesa del sótano:", True, c_rama),
+                    (x + 12, y))
+                y += 20
+                for lin in _envolver_lineas(self.fuente_desc, receta,
+                                            self.ANCHO_PANEL - 28):
+                    superficie.blit(
+                        self.fuente_desc.render(lin, True, COLOR_TEXTO),
+                        (x + 16, y))
+                    y += 20
+                base = ("(la planta sale de la maceta)"
+                        if nodo.rama == "natural" else
+                        "(el crudo se cocina en el laboratorio)")
+                for lin in _envolver_lineas(self.fuente_desc, base,
+                                            self.ANCHO_PANEL - 28):
+                    superficie.blit(
+                        self.fuente_desc.render(lin, True,
+                                                COLOR_TEXTO_SUAVE),
+                        (x + 16, y))
+                    y += 20
 
         # Requisitos faltantes
         if estado == "bloqueado" and nodo.padres:
@@ -3731,6 +3780,10 @@ class PantallaInventario(_PantallaGrillas):
         "planta": "Cosecha de la maceta. Planta + ziploc = med natural.",
         "quimico_crudo": ("Salido del laboratorio. Crudo + ziploc en "
                           "la mesa = med químico (así se vende)."),
+        "comp_antiviral": ("Insumo premium (app Insumos). Antiviral = "
+                           "compuesto de antiviral + ziploc."),
+        "comp_suero": ("Insumo top (app Insumos). Suero = compuesto "
+                       "de suero + ziploc."),
         "maceta": ("Mueble: tecla del hotbar para colocarla donde "
                    "apuntás. X frente a ella (vacía) la levanta."),
         "mesa_lab": ("Mueble: tecla del hotbar para colocarla donde "
