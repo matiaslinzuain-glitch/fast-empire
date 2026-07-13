@@ -17,10 +17,13 @@ import random
 
 import pygame
 
+import math
+
 from .economy import INGREDIENTES_POR_TANDA, MAX_CONTENEDOR
 from .map import POSICIONES_FILA
-from .settings import COLOR_CAJA, COLOR_CAJA_CINTA
-from .sprites import paleta_peaton, paleta_encapuchado, dibujar_personaje
+from .settings import COLOR_CAJA, COLOR_CAJA_CINTA, TILE
+from .sprites import (paleta_peaton, paleta_encapuchado, dibujar_personaje,
+                      dibujar_vehiculo_conduciendo)
 
 VELOCIDAD_PEATON = 85        # px/s, más lento que Walter
 VELOCIDAD_PANICO = 150       # px/s huyendo
@@ -476,3 +479,189 @@ class RepositorNPC(_Peaton):
             pygame.draw.rect(superficie, COLOR_CAJA, caja)
             pygame.draw.rect(superficie, COLOR_CAJA_CINTA,
                              (caja.centerx - 1, caja.y, 3, caja.height))
+
+
+# ---------------------------------------------------------
+# Ciudadanos: los vecinos que le dan vida a la ciudad
+# ---------------------------------------------------------
+class Ciudadano(_Peaton):
+    """Vecino que pasea las 24hs por calles y caminos (tile a tile:
+    jamás pisa un edificio). Se le puede OFRECER mercadería con E:
+    decide si compra (paga más caro que un trato), si pasa de largo
+    o si llama a la policía — esa resolución vive en main.py, acá
+    solo está el paseo, el pánico y la marca de "ya le ofrecí"."""
+
+    def __init__(self, col, fila):
+        super().__init__(col * TILE + 4, fila * TILE + 2,
+                         random.choice(COLORES_ROPA))
+        self.estado = "pasear"          # pasear | huyendo
+        self.tile = (col, fila)
+        self.objetivo = None            # centro del próximo tile (px)
+        self.direccion = random.choice([(1, 0), (-1, 0), (0, 1), (0, -1)])
+        self.ya_ofrecido = False        # una sola oferta por persona
+        self.timer_huida = 0.0
+
+    def entrar_en_panico(self):
+        if self.estado != "huyendo":
+            self.estado = "huyendo"
+            self.timer_huida = 4.0
+
+    def _tile_caminable(self, mapa, col, fila):
+        return (not mapa.es_solido_tile(col, fila)
+                and mapa.chars[fila][col] in ".,")
+
+    def _elegir_proximo(self, mapa):
+        """El próximo tile del paseo: prefiere seguir derecho, evita
+        pegar la vuelta (parece caminata de verdad, no ruido)."""
+        col, fila = self.tile
+        opciones, pesos = [], []
+        reversa = (-self.direccion[0], -self.direccion[1])
+        for d in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            if not self._tile_caminable(mapa, col + d[0], fila + d[1]):
+                continue
+            opciones.append(d)
+            pesos.append(6 if d == self.direccion
+                         else (0.3 if d == reversa else 1.5))
+        if not opciones:
+            self.direccion = reversa
+            return
+        self.direccion = random.choices(opciones, weights=pesos)[0]
+        c, f = col + self.direccion[0], fila + self.direccion[1]
+        self.objetivo = pygame.Vector2(c * TILE + TILE // 2,
+                                       f * TILE + TILE // 2)
+
+    def actualizar(self, dt, mapa):
+        if self.estado == "huyendo":
+            self.timer_huida -= dt
+            velocidad = VELOCIDAD_PANICO
+            if self.timer_huida <= 0:
+                self.estado = "pasear"
+        else:
+            velocidad = VELOCIDAD_PEATON * 0.75
+        if self.objetivo is None:
+            self._elegir_proximo(mapa)
+            return
+        # El hitbox camina con su CENTRO hacia el centro del tile
+        hacia = self.objetivo - pygame.Vector2(self.rect.center)
+        if hacia.length() < 4:
+            self.tile = (int(self.objetivo.x) // TILE,
+                         int(self.objetivo.y) // TILE)
+            self.objetivo = None
+            return
+        paso = hacia.normalize() * velocidad * dt
+        self.pos += paso
+        self.rect.topleft = (round(self.pos.x), round(self.pos.y))
+
+    def dibujar(self, superficie, camara):
+        r = camara.aplicar(self.rect)
+        dibujar_personaje(superficie, r, self.paleta, self)
+
+
+def crear_ciudadanos(mapa, cantidad, lejos_de=None, radio_px=200):
+    """Puebla la ciudad: ciudadanos en tiles exteriores al azar."""
+    gente = []
+    intentos = 0
+    while len(gente) < cantidad and intentos < 600:
+        intentos += 1
+        col = random.randrange(mapa.columnas)
+        fila = random.randrange(mapa.filas)
+        if mapa.es_solido_tile(col, fila) or mapa.chars[fila][col] not in ".,":
+            continue
+        pos = (col * TILE, fila * TILE)
+        if (lejos_de is not None and
+                pygame.Vector2(pos).distance_to(lejos_de) < radio_px):
+            continue
+        gente.append(Ciudadano(col, fila))
+    return gente
+
+
+# ---------------------------------------------------------
+# Tránsito: vehículos civiles que circulan por las calles
+# ---------------------------------------------------------
+class AutoNPC:
+    """Vehículo civil: maneja por los tiles de CALLE ('.'), dobla al
+    azar en las intersecciones y frena si Walter (o su vehículo) se
+    le cruza adelante. Decorativo pero vivo — no atropella."""
+
+    VELOCIDAD = 175
+    DISTANCIA_FRENO = 58    # px: frena si el jugador está a menos
+
+    def __init__(self, col, fila, tipo):
+        self.tipo = tipo                       # "moto" | "auto" | "camioneta"
+        self.pos = pygame.Vector2(col * TILE + TILE // 2,
+                                  fila * TILE + TILE // 2)
+        self.rect = pygame.Rect(0, 0, 34, 26)
+        self.rect.center = self.pos
+        self.direccion = random.choice([(1, 0), (-1, 0), (0, 1), (0, -1)])
+        self.objetivo = None
+        self.frenado = False
+
+    @property
+    def angulo(self):
+        """Radianes de pantalla (0 = derecha, horario positivo)."""
+        return math.atan2(self.direccion[1], self.direccion[0])
+
+    def _es_calle(self, mapa, col, fila):
+        return (not mapa.es_solido_tile(col, fila)
+                and mapa.chars[fila][col] == ".")
+
+    def _decidir_en_cruce(self, mapa):
+        """Al entrar a un tile: sigue derecho casi siempre; en los
+        cruces a veces dobla (nunca marcha atrás salvo sin salida)."""
+        col = int(self.pos.x) // TILE
+        fila = int(self.pos.y) // TILE
+        reversa = (-self.direccion[0], -self.direccion[1])
+        salidas = [d for d in ((1, 0), (-1, 0), (0, 1), (0, -1))
+                   if d != reversa and self._es_calle(mapa, col + d[0],
+                                                      fila + d[1])]
+        if not salidas:
+            self.direccion = reversa
+        elif self.direccion in salidas and random.random() < 0.78:
+            pass                                # sigue derecho
+        else:
+            self.direccion = random.choice(salidas)
+        c, f = col + self.direccion[0], fila + self.direccion[1]
+        self.objetivo = pygame.Vector2(c * TILE + TILE // 2,
+                                       f * TILE + TILE // 2)
+
+    def actualizar(self, dt, mapa, rect_jugador):
+        if self.objetivo is None:
+            self._decidir_en_cruce(mapa)
+            if self.objetivo is None:
+                return
+        # Freno de cortesía: el jugador está adelante y cerca
+        hacia_jugador = (pygame.Vector2(rect_jugador.center) - self.pos)
+        self.frenado = (hacia_jugador.length() < self.DISTANCIA_FRENO
+                        and hacia_jugador.dot(self.direccion) > 0)
+        if self.frenado:
+            return
+        hacia = self.objetivo - self.pos
+        if hacia.length() < 5:
+            self._decidir_en_cruce(mapa)
+            return
+        self.pos += hacia.normalize() * self.VELOCIDAD * dt
+        self.rect.center = (round(self.pos.x), round(self.pos.y))
+
+    def dibujar(self, superficie, camara):
+        r = camara.aplicar(self.rect)
+        dibujar_vehiculo_conduciendo(superficie, self.tipo, r.center,
+                                     self.angulo)
+
+
+def crear_transito(mapa, cantidad, lejos_de=None, radio_px=250):
+    """Los vehículos civiles, repartidos por las calles."""
+    autos = []
+    tipos = ["auto", "auto", "moto", "camioneta"]  # más autos que el resto
+    intentos = 0
+    while len(autos) < cantidad and intentos < 600:
+        intentos += 1
+        col = random.randrange(mapa.columnas)
+        fila = random.randrange(mapa.filas)
+        if mapa.es_solido_tile(col, fila) or mapa.chars[fila][col] != ".":
+            continue
+        pos = (col * TILE, fila * TILE)
+        if (lejos_de is not None and
+                pygame.Vector2(pos).distance_to(lejos_de) < radio_px):
+            continue
+        autos.append(AutoNPC(col, fila, random.choice(tipos)))
+    return autos

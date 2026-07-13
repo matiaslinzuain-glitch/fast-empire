@@ -51,7 +51,7 @@ from src.economy import (
     PUNTOS_POR_RIVAL, PUNTOS_POR_ESCAPE, UMBRAL_DESBLOQUEO_MEDS,
     PRECIO_CURACION, CURA_SANGUCHE, LUGARES_VENTA,
     MAX_TRATOS_ACTIVOS, MAX_OFERTAS, VENTAS_PARA_CONTACTO,
-    SEGUNDOS_RECONQUISTA, VEHICULOS, MULT_CONDUCIR,
+    SEGUNDOS_RECONQUISTA, VEHICULOS, MULT_CONDUCIR, VENTA_MED,
     COMISION_MOZO, SUELDO_CHEF, PRECIO_MOZO, PRECIO_CHEF,
     SUELDO_REPOSITOR, PRECIO_REPOSITOR,
     MAX_CONTENEDOR, MUEBLES,
@@ -59,6 +59,7 @@ from src.economy import (
 from src.npcs import (
     ClienteLocal, CompradorIlegal, Proveedor, VendedorZona,
     ContactoFlash, MozoNPC, ChefNPC, RepositorNPC,
+    crear_ciudadanos, crear_transito,
 )
 from src.events import GestorEventos, PROB_EMBOSCADA, EMBOSCADORES
 from src.dialogue import CajaDialogo
@@ -67,7 +68,7 @@ from src.tiempo import RelojJuego
 from src import savegame
 from src.enemies import (
     Busqueda, Proyectil, RivalGastronomico,
-    crear_inspectores, crear_matones,
+    crear_policia, crear_matones,
 )
 from src.skills import Habilidades
 from src.skilltree import SkillTree, AppSalesManager, PRODUCTOS
@@ -105,8 +106,17 @@ ALCANCE_RUIDO_DISPARO = 340
 # Distancia a la que los NPCs entran en pánico por la violencia
 ALCANCE_PANICO = 300
 DURACION_AVISO = 2.6
-SEGUNDOS_RETIRADA = 8.0   # con búsqueda en 0, los inspectores se van
 SEGUNDOS_AUTOSAVE = 60.0  # guardado automático durante la partida
+# La ciudad viva: dotación policial permanente, vecinos y tránsito
+DOTACION_POLICIAL = 6     # inspectores rondando SIEMPRE
+SEGUNDOS_REFUERZO = 30.0  # cuánto tarda en reponerse un caído
+CIUDADANOS_TOTALES = 26   # vecinos paseando por la ciudad
+AUTOS_TOTALES = 9         # vehículos civiles circulando
+# La venta callejera: precio inflado y sus riesgos
+MULT_PRECIO_CALLE = 1.3   # el vecino paga más que un trato pactado
+PROB_ACEPTA_CALLE = 0.55  # chance de que el vecino compre
+PROB_DENUNCIA_CALLE = 0.5 # si rechaza: 50% llama a la policía
+SEGUNDOS_VENTA_VISTA = 2.5  # ventana en que un inspector "te vio vender"
 # Rastreo policial tras un homicidio: cada tanto los inspectores
 # reciben tu posición (los vecinos van pasando el dato)
 SEGUNDOS_RASTREO = 45.0
@@ -258,12 +268,16 @@ class Juego:
         self.gestor = GestorEventos()
         self.contacto_flash = None   # el NPC de la oferta flash activa
 
-        # Ley y competencia: SIN inspectores hasta que haya denuncias.
+        # Ley y competencia: la POLICÍA ES PERMANENTE — una dotación
+        # de inspectores ronda las calles desde el minuto uno, sin
+        # recorridos fijos. Solo reaccionan si te ven EN FALTA.
         # Los matones aparecen recién cuando El Flaco te cuenta cómo
         # viene la mano (los sincroniza _sincronizar_matones)
         self.busqueda = Busqueda()
-        self.inspectores = []
-        self.timer_retirada = 0.0
+        self.inspectores = crear_policia(
+            self.mapa, DOTACION_POLICIAL,
+            lejos_de=pygame.Vector2(POSICION_INICIAL))
+        self.timer_refuerzo = 0.0     # respawn de inspectores caídos
         self.pos_infraccion = None    # dónde fue la última denuncia
         self.rastreo = 0.0            # rastreo activo tras un homicidio
         self.timer_ping = 0.0
@@ -273,6 +287,14 @@ class Juego:
         self.aviso = None
         self.aviso_timer = 0.0
         self.timer_autosave = SEGUNDOS_AUTOSAVE
+
+        # La ciudad viva: vecinos paseando y tránsito en las calles.
+        # A los ciudadanos se les puede ofrecer mercadería con E.
+        self.ciudadanos = crear_ciudadanos(
+            self.mapa, CIUDADANOS_TOTALES,
+            lejos_de=pygame.Vector2(POSICION_INICIAL))
+        self.transito = crear_transito(self.mapa, AUTOS_TOTALES)
+        self.timer_venta_calle = 0.0  # ventana en que la ley te vio vender
 
     def _guardar_partida(self, aviso=None):
         ok = savegame.guardar(self)
@@ -1115,6 +1137,10 @@ class Juego:
                 and self.contacto_flash.puede_vender(self.jugador.rect)):
             self._comprar_cargamento_flash()
             return
+        ciudadano = self._ciudadano_cerca()
+        if ciudadano is not None and self.economia.tiene_meds():
+            self._ofrecer_droga(ciudadano)
+            return
         if self._cerca_de(self.mapa.tiles_tienda):
             self.tienda.abrir()
             self.estado = "tienda"
@@ -1518,33 +1544,35 @@ class Juego:
     # Denuncias y presencia policial dinámica
     # -----------------------------------------------------
     def _reportar_infraccion(self, tipo, cantidad, cooldown, posicion):
-        """Toda infracción genera denuncias de vecinos: sube la búsqueda
-        y guarda dónde pasó, para que los inspectores lleguen ahí."""
+        """Toda infracción genera denuncias de vecinos: sube la
+        búsqueda y los inspectores MÁS CERCANOS van a investigar el
+        lugar (la dotación es permanente: nadie 'llega de afuera')."""
         self.busqueda.reportar(tipo, cantidad, cooldown)
         self.pos_infraccion = pygame.Vector2(posicion)
+        cercanos = sorted(
+            self.inspectores,
+            key=lambda i: pygame.Vector2(i.rect.center).distance_to(
+                self.pos_infraccion))
+        for inspector in cercanos[:3]:
+            inspector.alertar(self.pos_infraccion)
 
     def _actualizar_presencia_policial(self, dt):
-        """Convoca inspectores cuando hay búsqueda activa y los retira
-        cuando la zona se enfría."""
-        if self.busqueda.nivel >= 1 and not self.inspectores:
-            cantidad = min(2 + self.busqueda.nivel, 6)
-            self.inspectores = crear_inspectores(cantidad, self.pos_infraccion)
-            if self.pos_infraccion is not None:
-                for inspector in self.inspectores:
-                    inspector.alertar(self.pos_infraccion)
-            self.timer_retirada = 0.0
-            self.audio.reproducir("sirena")
-            self._texto_sobre_jugador(
-                "¡Hubo denuncias! Llegaron inspectores", COLOR_ERROR)
-        elif self.busqueda.nivel == 0 and self.inspectores:
-            self.timer_retirada += dt
-            if self.timer_retirada >= SEGUNDOS_RETIRADA:
-                self.inspectores = []
-                self.rastreo = 0.0
-                self._texto_sobre_jugador(
-                    "La zona se enfrió: los inspectores se retiraron", COLOR_ORO)
-        else:
-            self.timer_retirada = 0.0
+        """La dotación es fija: acá solo se REPONEN los inspectores
+        caídos (la central manda un reemplazo, lejos de tu vista).
+        Además, con la búsqueda en cero los que quedaron alterados
+        vuelven solos a su ronda vía sus propios timers."""
+        if len(self.inspectores) >= DOTACION_POLICIAL:
+            self.timer_refuerzo = 0.0
+            return
+        self.timer_refuerzo += dt
+        if self.timer_refuerzo < SEGUNDOS_REFUERZO:
+            return
+        self.timer_refuerzo = 0.0
+        refuerzo = crear_policia(
+            self.mapa, 1, lejos_de=pygame.Vector2(self.jugador.rect.center),
+            radio_px=500)
+        if refuerzo:
+            self.inspectores += refuerzo
 
     def _actualizar_rastreo(self, dt):
         """Después de un homicidio la policía te rastrea ACTIVAMENTE:
@@ -1574,6 +1602,70 @@ class Juego:
         for comprador in self.compradores:
             if centro.distance_to(comprador.rect.center) < ALCANCE_PANICO:
                 comprador.irse()
+        for ciudadano in self.ciudadanos:
+            if centro.distance_to(ciudadano.rect.center) < ALCANCE_PANICO:
+                ciudadano.entrar_en_panico()
+
+    # -----------------------------------------------------
+    # Venta callejera: ofrecerle mercadería a un vecino
+    # -----------------------------------------------------
+    def _ciudadano_cerca(self):
+        alcance = self.jugador.rect.inflate(RADIO_INTERACCION,
+                                            RADIO_INTERACCION)
+        for ciudadano in self.ciudadanos:
+            if (not ciudadano.muerto and ciudadano.estado == "pasear"
+                    and alcance.colliderect(ciudadano.rect)):
+                return ciudadano
+        return None
+
+    def _ofrecer_droga(self, ciudadano):
+        """E frente a un vecino con mercadería encima: le ofrecés el
+        mejor medicamento que llevás, más caro que en un trato. Él
+        decide — compra, pasa de largo, o llama a la policía. Y ojo:
+        un inspector que te vea en la transacción te ficha igual."""
+        if ciudadano.ya_ofrecido:
+            self._texto_sobre_jugador("Ya le ofreciste — no insistas",
+                                      COLOR_TEXTO_SUAVE)
+            return
+        disponibles = [p for p in PRODUCTOS
+                       if self.economia.inventario.tiene(p)]
+        if not disponibles:
+            return
+        tipo = max(disponibles, key=lambda p: VENTA_MED[p])
+        ciudadano.ya_ofrecido = True
+        # Mostrar mercadería en la calle es exponerse: si un
+        # inspector te ve en estos segundos, sos hombre en falta
+        self.timer_venta_calle = SEGUNDOS_VENTA_VISTA
+
+        if random.random() < PROB_ACEPTA_CALLE:
+            precio = round(VENTA_MED[tipo] * MULT_PRECIO_CALLE
+                           * self.arbol_meds.mult_precio(tipo))
+            xp = PRODUCTOS[tipo]["xp_venta"]
+            self.economia.inventario.quitar(tipo)
+            self.economia.dinero += precio
+            self.economia.total_ilegal += precio
+            self.economia.puntos += xp
+            self.audio.reproducir("venta")
+            self._texto_sobre_jugador(
+                f"Venta callejera: +${precio} (+{xp} XP)", COLOR_DINERO)
+            # También suma para las misiones del Proveedor
+            if self.mision is not None:
+                if (self.mision["tipo"] == "reparto"
+                        or (self.mision["tipo"] == "quimicos"
+                            and tipo.startswith("med_quim"))
+                        or (self.mision["tipo"] == "naturales"
+                            and tipo.startswith("med_nat"))):
+                    self._avanzar_mision(1)
+        elif random.random() < PROB_DENUNCIA_CALLE:
+            ciudadano.entrar_en_panico()
+            self._reportar_infraccion("denuncia_calle", 1, 6.0,
+                                      self.jugador.rect.center)
+            self.audio.reproducir("sirena")
+            self._texto_sobre_jugador("¡Está llamando a la policía!",
+                                      COLOR_ERROR)
+        else:
+            self._texto_sobre_jugador("No le interesó — siguió de largo",
+                                      COLOR_TEXTO_SUAVE)
 
     # -----------------------------------------------------
     # Combate
@@ -1583,7 +1675,8 @@ class Juego:
         empleados = [n for n in (self.mozo_npc, self.chef_npc,
                                  self.repositor_npc)
                      if n is not None]
-        return self.fila + self.comensales + self.compradores + empleados
+        return (self.fila + self.comensales + self.compradores
+                + empleados + self.ciudadanos)
 
     def _atacar(self):
         usa_pistola = self.economia.tiene_pistola and self.economia.arma_equipada
@@ -1811,15 +1904,18 @@ class Juego:
 
     def _caer(self, titulo, detalle):
         """Reset compartido de arresto/muerte: Walter reaparece en el
-        local, la búsqueda se limpia y los inspectores se van (caso
-        cerrado). Los rivales siguen donde estaban."""
+        local y la búsqueda se limpia — CASO CERRADO: pagaste (multa
+        o morgue), así que nadie te sigue buscando. Los inspectores
+        no desaparecen (son la dotación fija de la ciudad): vuelven
+        a su ronda como si nada. Los rivales siguen donde estaban."""
         self._estacionar()   # el vehículo queda donde caíste
         self.jugador.reaparecer(*POSICION_INICIAL)
         self.jugador.vida_max = self.habilidades.vida_max()
         self.jugador.vida = self.jugador.vida_max
         self.busqueda.reiniciar()
-        self.inspectores = []
-        self.timer_retirada = 0.0
+        for inspector in self.inspectores:
+            inspector.calmarse()
+        self.timer_venta_calle = 0.0
         self.rastreo = 0.0
         self.proyectiles.clear()
         # Los tratos con encuentro en curso se caen
@@ -1984,9 +2080,26 @@ class Juego:
                               " mercadería, quedaron en cero")
                 self.aviso_timer = 3.5
 
-        # ¿Estás cerrando un trato a la vista de la ley?
-        vendiendo_ilegal = (self._comprador_para_entregar() is not None
-                            and self.economia.tiene_meds())
+        # ¿Estás cerrando un trato a la vista de la ley? (también
+        # cuenta la venta callejera de los últimos segundos)
+        self.timer_venta_calle = max(0.0, self.timer_venta_calle - dt)
+        vendiendo_ilegal = ((self._comprador_para_entregar() is not None
+                             and self.economia.tiene_meds())
+                            or self.timer_venta_calle > 0)
+
+        # La ciudad viva: vecinos paseando y tránsito circulando
+        for ciudadano in self.ciudadanos:
+            ciudadano.actualizar(dt, self.mapa)
+        self.ciudadanos = [c for c in self.ciudadanos if not c.terminado]
+        for auto in self.transito:
+            auto.actualizar(dt, self.mapa, self.jugador.rect)
+        # Reponer de a poco la población que se fue o murió
+        if len(self.ciudadanos) < CIUDADANOS_TOTALES and \
+                random.random() < dt / 10.0:
+            self.ciudadanos += crear_ciudadanos(
+                self.mapa, 1,
+                lejos_de=pygame.Vector2(self.jugador.rect.center),
+                radio_px=450)
 
         # Inspectores (si es que hay)
         for inspector in self.inspectores:
@@ -2185,6 +2298,10 @@ class Juego:
             if evento is not None:
                 return (f"E — Comprar {evento.cantidad} "
                         f"{NOMBRE_MED[evento.tipo]} (${evento.precio_total})")
+        ciudadano = self._ciudadano_cerca()
+        if (ciudadano is not None and not ciudadano.ya_ofrecido
+                and self.economia.tiene_meds()):
+            return "E — Ofrecer mercadería (paga mejor… si acepta)"
         rect_v = self._rect_vehiculo()
         if rect_v is not None and self.jugador.rect.inflate(
                 RADIO_INTERACCION, RADIO_INTERACCION).colliderect(rect_v):
@@ -2323,6 +2440,11 @@ class Juego:
                              mirando_izq=getattr(self, "_vehiculo_izq",
                                                  True))
         self._dibujar_contenedor()
+        # La ciudad viva: tránsito debajo de la gente
+        for auto in self.transito:
+            auto.dibujar(self.pantalla, self.camara)
+        for ciudadano in self.ciudadanos:
+            ciudadano.dibujar(self.pantalla, self.camara)
         for cliente in self.fila + self.comensales:
             cliente.dibujar(self.pantalla, self.camara)
         if self.mozo_npc is not None:

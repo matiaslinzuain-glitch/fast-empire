@@ -37,6 +37,25 @@ from .sprites import PALETA_INSPECTOR, PALETA_RIVAL, dibujar_personaje
 COLOR_PIEL = (196, 164, 120)
 
 
+def tile_exterior_cerca(mapa, centro, radio_tiles):
+    """Un tile caminable AL AIRE LIBRE (calle '.' o camino ',') al
+    azar alrededor de `centro` (px de mundo). Mantiene a policías y
+    peatones en la vía pública: nunca eligen interiores ni techos.
+    Devuelve un Vector2 en px, o None si no encontró."""
+    col0 = int(centro[0] // TILE)
+    fila0 = int(centro[1] // TILE)
+    for _ in range(14):
+        col = col0 + random.randint(-radio_tiles, radio_tiles)
+        fila = fila0 + random.randint(-radio_tiles, radio_tiles)
+        if mapa.es_solido_tile(col, fila):
+            continue
+        if mapa.chars[fila][col] not in ".,":
+            continue
+        return pygame.Vector2(col * TILE + TILE // 2,
+                              fila * TILE + TILE // 2)
+    return None
+
+
 def hay_linea_de_vision(mapa, origen, destino):
     """True si no hay paredes entre ambos puntos (muestreo cada ~14px
     sobre la grilla del mapa, que es una consulta O(1) por punto)."""
@@ -204,10 +223,21 @@ class InspectorSanitario(Enemigo):
     SEGUNDOS_BUSQUEDA = 12.0
     RADIO_RASTRILLAJE = 6   # tiles alrededor de la última posición vista
 
-    def __init__(self, ruta_tiles):
-        self.ruta_tiles = ruta_tiles  # se guarda para el respawn
-        self.ruta = [(c * TILE, f * TILE) for c, f in ruta_tiles]
-        super().__init__(*self.ruta[0], self.VIDA, self.VELOCIDAD)
+    RADIO_RONDA = 12        # tiles: radio de cada tramo de la ronda libre
+
+    def __init__(self, ruta_tiles=None, pos=None):
+        """Con `ruta_tiles` patrulla esa ruta fija (modo legado).
+        Sin ruta (pos=(x, y) en px) hace RONDA LIBRE: elige esquinas
+        al azar y camina — su recorrido es impredecible."""
+        if ruta_tiles:
+            self.ruta_tiles = ruta_tiles  # se guarda para el respawn
+            self.ruta = [(c * TILE, f * TILE) for c, f in ruta_tiles]
+            inicio = self.ruta[0]
+        else:
+            self.ruta_tiles = None
+            self.ruta = None
+            inicio = pos or (0, 0)
+        super().__init__(*inicio, self.VIDA, self.VELOCIDAD)
         self.indice = 0
         self.estado = "patrullar"  # patrullar | investigar | perseguir | buscar
         self.ultima_vista = None       # última posición conocida del jugador
@@ -216,6 +246,7 @@ class InspectorSanitario(Enemigo):
         self.timer_busqueda = 0.0
         self.timer_mirar = 0.0
         self.objetivo_deambulo = None
+        self.objetivo_ronda = None     # próximo destino de la ronda libre
         self.vision_actual = self.VISION  # para dibujar el cono
 
     # --- Percepción ---
@@ -301,11 +332,33 @@ class InspectorSanitario(Enemigo):
         else:  # patrullar
             if ve and en_falta:
                 self._empezar_persecucion(jugador, vendiendo, busqueda)
+            elif self.ruta is None:
+                self._rondar(dt, mapa, paredes)
             elif self._navegar_hacia(self.ruta[self.indice], dt, mapa,
                                      paredes) < 8:
                 self.indice = (self.indice + 1) % len(self.ruta)
 
         return None
+
+    def _rondar(self, dt, mapa, paredes):
+        """Ronda libre: camina tranquilo hasta una esquina al azar y
+        elige la siguiente al llegar. Sin recorrido fijo que
+        aprenderse — nunca sabés por dónde va a aparecer."""
+        if self.objetivo_ronda is None or self._navegar_hacia(
+                self.objetivo_ronda, dt, mapa, paredes,
+                self.velocidad * 0.55) < 10:
+            self.objetivo_ronda = tile_exterior_cerca(
+                mapa, self.rect.center, self.RADIO_RONDA)
+
+    def calmarse(self):
+        """Caso cerrado (arresto o zona fría): vuelve a su ronda."""
+        self.estado = "patrullar"
+        self.ultima_vista = None
+        self.objetivo_investigar = None
+        self.objetivo_ronda = None
+        self.timer_perdida = 0.0
+        self.timer_busqueda = 0.0
+        self.navegante.limpiar()
 
     def _empezar_persecucion(self, jugador, vendiendo, busqueda):
         self.estado = "perseguir"
@@ -483,6 +536,26 @@ RUTAS_INSPECTORES = [
     [(2, 75), (110, 75), (110, 88), (2, 88)],  # industrial / barrio bajo
     [(2, 93), (115, 93), (115, 94), (2, 94)],  # muelle nuevo
 ]
+
+
+def crear_policia(mapa, cantidad, lejos_de=None, radio_px=380):
+    """La DOTACIÓN PERMANENTE: inspectores en ronda libre repartidos
+    por las calles de la ciudad (siempre están, como cualquier NPC).
+    `lejos_de` (px) evita que aparezcan encima del jugador."""
+    policias = []
+    intentos = 0
+    while len(policias) < cantidad and intentos < 500:
+        intentos += 1
+        col = random.randrange(mapa.columnas)
+        fila = random.randrange(mapa.filas)
+        if mapa.es_solido_tile(col, fila) or mapa.chars[fila][col] != ".":
+            continue
+        pos = (col * TILE, fila * TILE)
+        if (lejos_de is not None and
+                pygame.Vector2(pos).distance_to(lejos_de) < radio_px):
+            continue
+        policias.append(InspectorSanitario(pos=pos))
+    return policias
 
 
 def crear_inspectores(cantidad=None, cerca_de=None):
