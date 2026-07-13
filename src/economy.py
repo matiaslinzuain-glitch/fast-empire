@@ -74,7 +74,7 @@ NOMBRE_ITEM = {
     "sanguche": "Sanguches",     "med_nat": "Med. naturales",
     "med_quim": "Med. químicos", "ziploc": "Bolsas ziploc",
     "semillas": "Semillas",      "compuestos": "Compuestos",
-    "planta": "Plantas",
+    "planta": "Plantas",         "quimico_crudo": "Químico crudo",
     "med_nat2": "Extractos botánicos", "med_nat3": "Panaceas",
     "med_quim2": "Antivirales",        "med_quim3": "Sueros",
     "maceta": "Maceta",  "mesa_lab": "Mesa de laboratorio",
@@ -213,6 +213,7 @@ class Economia:
     semillas = _item_inventario("semillas")
     compuestos = _item_inventario("compuestos")
     planta = _item_inventario("planta")
+    quimico_crudo = _item_inventario("quimico_crudo")
 
     def __init__(self):
         self.inventario = Inventario(*GRILLA_JUGADOR, expandible=True)

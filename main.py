@@ -1305,7 +1305,7 @@ class Juego:
                 COLOR_ERROR)
         else:
             self._texto_sobre_jugador(
-                "La mesa pide: planta + ziploc, o compuesto + ziploc",
+                "La mesa pide: planta + ziploc, o químico crudo + ziploc",
                 COLOR_ERROR)
 
     # -----------------------------------------------------
@@ -1427,8 +1427,9 @@ class Juego:
                 "¡La tanda se arruinó! (Estabilizador Térmico lo evita)",
                 COLOR_ERROR)
         elif cosechado is not None:
-            nombre = ("medicamento químico" if cosechado == "med_quim"
-                      else "medicamento natural")
+            nombre = {"quimico_crudo": "químico crudo (empaquetalo en la mesa)",
+                      "med_nat": "medicamento natural"}.get(
+                          cosechado, "medicamento")
             extra = " x2 — ¡unidad extra!" if mueble.ultimo_doble else ""
             self._texto_sobre_jugador(f"+1 {nombre}{extra}", COLOR_DINERO)
         elif mueble.timer is not None:
@@ -2218,7 +2219,7 @@ class Juego:
             proximo = self.sotano.proxima_receta(self.economia.inventario,
                                                  self.arbol_meds)
             stock = (f"(P:{self.economia.planta} "
-                     f"C:{self.economia.compuestos} "
+                     f"Q:{self.economia.quimico_crudo} "
                      f"Z:{self.economia.ziploc})")
             if proximo is not None:
                 return f"E — Armar {PRODUCTOS[proximo]['nombre']} {stock}"

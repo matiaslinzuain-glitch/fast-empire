@@ -364,6 +364,16 @@ def dibujar_icono(superficie, id_item, rect, economia=None):
             pygame.draw.line(superficie.raw, (90, 170, 90),
                              (cx, cy + 2), (cx + dx, cy - 8), 2)
         pygame.draw.circle(superficie.raw, (110, 200, 110), (cx, cy - 8), 3)
+    elif id_item == "quimico_crudo":
+        # Cristal violeta cocido, sin empaquetar (aún no vendible)
+        pygame.draw.polygon(superficie.raw, (150, 90, 190),
+                            [(cx, cy - 9), (cx + 8, cy - 2),
+                             (cx + 5, cy + 8), (cx - 5, cy + 8),
+                             (cx - 8, cy - 2)])
+        pygame.draw.polygon(superficie.raw, (200, 160, 235),
+                            [(cx, cy - 9), (cx + 8, cy - 2), (cx, cy)])
+        pygame.draw.line(superficie.raw, (110, 60, 150),
+                         (cx, cy - 9), (cx, cy + 8), 1)
     elif id_item == "maceta":
         # Maceta vacía de la mueblería (mueble colocable)
         pygame.draw.polygon(superficie.raw, (150, 88, 52),
@@ -3712,13 +3722,15 @@ class PantallaInventario(_PantallaGrillas):
         "sanguche": (f"+{CURA_SANGUCHE} de vida — E para comer uno. "
                      f"Máximo {MAX_SANGUCHES}."),
         "med_nat": "Mercadería. Se fabrica en el sótano: planta + ziploc.",
-        "med_quim": ("Mercadería premium. Compuestos cocinados en el "
-                     "laboratorio del sótano."),
-        "ziploc": "Insumo: bolsas para embolsar la mercadería natural.",
+        "med_quim": ("Mercadería premium. Químico crudo + ziploc en "
+                     "la mesa (el crudo sale del laboratorio)."),
+        "ziploc": "Insumo: para empaquetar mercadería natural y química.",
         "semillas": "Insumo: se plantan en la maceta del sótano.",
-        "compuestos": ("Insumo: se cocinan en el laboratorio del "
-                       "sótano."),
+        "compuestos": ("Insumo: se cocinan en el laboratorio para "
+                       "obtener químico crudo."),
         "planta": "Cosecha de la maceta. Planta + ziploc = med natural.",
+        "quimico_crudo": ("Salido del laboratorio. Crudo + ziploc en "
+                          "la mesa = med químico (así se vende)."),
         "maceta": ("Mueble: tecla del hotbar para colocarla donde "
                    "apuntás. X frente a ella (vacía) la levanta."),
         "mesa_lab": ("Mueble: tecla del hotbar para colocarla donde "

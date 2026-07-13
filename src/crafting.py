@@ -36,13 +36,20 @@ SEGUNDOS_LABORATORIO = 45.0   # cuánto tarda una cocinada química
 # el mejor tier primero — la mesa arma siempre lo más caro que
 # se pueda pagar). Cada entrada: (producto, {insumo: cantidad}).
 # Los tiers 2 y 3 los enseña el árbol de I+D (skilltree.py).
+#
+# La mesa SOLO EMPAQUETA bases ya producidas con ziploc:
+#   - naturales: la PLANTA sale de la maceta
+#   - químicos:  el QUÍMICO CRUDO sale del LABORATORIO (cocinar)
+# Antes la mesa armaba químicos directo de `compuestos`, salteando
+# el laboratorio: por eso cocinar era opcional. Ahora no hay químico
+# vendible sin cocinar primero el crudo.
 RECETA_NATURAL = {"planta": 1, "ziploc": 1}
-RECETA_QUIMICO_MESA = {"compuestos": 1, "ziploc": 1}
+RECETA_QUIMICO_MESA = {"quimico_crudo": 1, "ziploc": 1}
 RECETAS_MESA = [
     ("med_nat3",  {"planta": 3, "ziploc": 2}),
-    ("med_quim3", {"compuestos": 4, "ziploc": 2}),
+    ("med_quim3", {"quimico_crudo": 4, "ziploc": 2}),
     ("med_nat2",  {"planta": 2, "ziploc": 1}),
-    ("med_quim2", {"compuestos": 2, "ziploc": 1}),
+    ("med_quim2", {"quimico_crudo": 2, "ziploc": 1}),
     ("med_nat",   RECETA_NATURAL),
     ("med_quim",  RECETA_QUIMICO_MESA),
 ]
@@ -151,8 +158,10 @@ class Sotano:
         """Atajo histórico: la receta natural puntual."""
         return self.armar_en_mesa(inventario, "med_nat", arbol) == "med_nat"
 
-    # -- laboratorio: compuestos → (tiempo) → med químico --
-    # (con Doble Faz también: planta → med natural, sin ziploc)
+    # -- laboratorio: compuestos → (tiempo) → QUÍMICO CRUDO --
+    # El crudo NO se vende: hay que empaquetarlo con ziploc en la
+    # mesa (compuestos → cocinar → crudo → empaquetar → med químico).
+    # (con Doble Faz también: planta → med natural directo, sin ziploc)
     def iniciar_laboratorio(self, inventario, arbol=None):
         """Arranca una cocinada (si el árbol ya enseñó químicos).
         Termodinámica acelera el fuego; el Purificador puede
@@ -163,14 +172,18 @@ class Sotano:
         producto = None
         if (self._permitido("med_quim", arbol)
                 and inventario.tiene("compuestos")):
-            producto, insumo = "med_quim", "compuestos"
+            # El lab entrega crudo; la mesa lo convierte en med. químico
+            producto, insumo = "quimico_crudo", "compuestos"
         elif (arbol is not None and arbol.lab_acepta_naturales()
                 and inventario.tiene("planta")):
             producto, insumo = "med_nat", "planta"
         if producto is None:
             return False
+        # El Purificador de Mermas perdona el compuesto: se mide
+        # contra la rama sintética aunque el output sea crudo
+        rama_prob = "med_quim" if producto == "quimico_crudo" else producto
         gratis = (arbol is not None and
-                  random.random() < arbol.prob_insumos_gratis(producto))
+                  random.random() < arbol.prob_insumos_gratis(rama_prob))
         if not gratis:
             inventario.quitar(insumo)
         self.ultimo_sin_insumos = gratis
@@ -183,16 +196,19 @@ class Sotano:
 
     def cosechar_laboratorio(self, inventario, arbol=None):
         """Devuelve None si no había nada listo, "fallo" si la
-        tanda salió mal, o el id del producto cosechado."""
+        tanda salió mal, o el id del producto cosechado (crudo o,
+        con Doble Faz, med. natural)."""
         if self.laboratorio != LISTA:
             return None
         self.laboratorio = None
         if self.lab_fallo:
             self.lab_fallo = False
             return "fallo"
-        producto = self.lab_producto or "med_quim"
+        producto = self.lab_producto or "quimico_crudo"
         cantidad = 1
-        if (arbol is not None and
+        # La unidad extra (Mezcla Doble) solo aplica a productos
+        # terminados: el crudo se multiplica recién al empaquetar
+        if (arbol is not None and producto != "quimico_crudo" and
                 random.random() < arbol.prob_unidad_extra(producto)):
             cantidad = 2
         self.ultimo_doble = cantidad == 2
@@ -311,21 +327,23 @@ class MuebleColocado:
     # -- ciclo de la mesa de laboratorio --
     def iniciar_cocinada(self, inventario, arbol=None):
         """Como Sotano.iniciar_laboratorio, sobre el timer propio:
-        compuestos → químico (o planta → natural con Doble Faz);
-        sin Estabilizador Térmico la tanda puede salir fallada."""
+        compuestos → QUÍMICO CRUDO (o planta → natural con Doble
+        Faz); sin Estabilizador Térmico la tanda puede salir fallada.
+        El crudo se vende recién tras empaquetarlo en la mesa."""
         if self.timer is not None:
             return False
         producto = None
         if ((arbol is None or arbol.desbloqueado("med_quim"))
                 and inventario.tiene("compuestos")):
-            producto, insumo = "med_quim", "compuestos"
+            producto, insumo = "quimico_crudo", "compuestos"
         elif (arbol is not None and arbol.lab_acepta_naturales()
                 and inventario.tiene("planta")):
             producto, insumo = "med_nat", "planta"
         if producto is None:
             return False
+        rama_prob = "med_quim" if producto == "quimico_crudo" else producto
         gratis = (arbol is not None and
-                  random.random() < arbol.prob_insumos_gratis(producto))
+                  random.random() < arbol.prob_insumos_gratis(rama_prob))
         if not gratis:
             inventario.quitar(insumo)
         self.ultimo_sin_insumos = gratis
@@ -338,16 +356,17 @@ class MuebleColocado:
 
     def retirar_producto(self, inventario, arbol=None):
         """Como Sotano.cosechar_laboratorio: None si no hay nada
-        listo, "fallo" si la tanda salió mal, o el id cosechado."""
+        listo, "fallo" si la tanda salió mal, o el id cosechado
+        (crudo o, con Doble Faz, med. natural)."""
         if self.timer != LISTA:
             return None
         self.timer = None
         if self.fallo:
             self.fallo = False
             return "fallo"
-        producto = self.producto or "med_quim"
+        producto = self.producto or "quimico_crudo"
         cantidad = 1
-        if (arbol is not None and
+        if (arbol is not None and producto != "quimico_crudo" and
                 random.random() < arbol.prob_unidad_extra(producto)):
             cantidad = 2
         self.ultimo_doble = cantidad == 2
