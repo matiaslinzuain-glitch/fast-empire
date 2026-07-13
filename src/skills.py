@@ -19,67 +19,67 @@ from .economy import (
 )
 
 # (los colores acompañan a cada rama en la pantalla del árbol)
-# Rebalanceo: costos x3 aprox. — llenar una rama es un objetivo
-# de mediano plazo, no algo que sale con las primeras ventas.
+# Rebalanceo: 15/30/50/80 puntos por nivel — la primera de cada
+# rama es accesible y el tope se hace desear.
 ARBOL = [
     {"nombre": "COCINA", "color": (214, 128, 52), "nodos": [
         {"id": "recetario", "nombre": "Recetario del abuelo",
          "desc": "La calidad mínima de cada tanda sube de 60% a 70%.",
-         "puntos": 5, "dinero": 100},
+         "puntos": 15, "dinero": 100},
         {"id": "tandas", "nombre": "Tandas grandes",
          "desc": "Cada cocinada rinde 6 platos en vez de 4.",
-         "puntos": 10, "dinero": 300},
+         "puntos": 30, "dinero": 300},
         {"id": "fuego", "nombre": "Fuego rápido",
          "desc": "Cocinar tarda 3 segundos en vez de 5.",
-         "puntos": 16, "dinero": 600},
+         "puntos": 50, "dinero": 600},
         {"id": "estrella", "nombre": "Estrella clandestina",
          "desc": "Cocina de autor: la calidad mínima sube a 85%.",
-         "puntos": 26, "dinero": 1000},
+         "puntos": 80, "dinero": 1000},
     ]},
     {"nombre": "VENTAS", "color": (222, 178, 84), "nodos": [
         {"id": "onda", "nombre": "Atención con onda",
          "desc": "Los platos se cobran un 25% más caros.",
-         "puntos": 5, "dinero": 100},
+         "puntos": 15, "dinero": 100},
         {"id": "fama", "nombre": "Fama del barrio",
          "desc": "Los clientes del local llegan mucho más seguido.",
-         "puntos": 10, "dinero": 300},
+         "puntos": 30, "dinero": 300},
         {"id": "fiel", "nombre": "Clientela fiel",
          "desc": "La fila del mostrador admite 8 clientes en vez de 5.",
-         "puntos": 16, "dinero": 500},
+         "puntos": 50, "dinero": 500},
         {"id": "leyenda", "nombre": "Leyenda del barrio",
          "desc": "El local es un clásico: los platos se cobran un "
                  "50% más caros (reemplaza el 25%).",
-         "puntos": 26, "dinero": 900},
+         "puntos": 80, "dinero": 900},
     ]},
     {"nombre": "COMBATE", "color": (200, 70, 60), "nodos": [
         {"id": "aguante", "nombre": "Aguante",
          "desc": "Vida máxima 140 (te cura +40 al comprarla).",
-         "puntos": 5, "dinero": 180},
+         "puntos": 15, "dinero": 180},
         {"id": "pulso", "nombre": "Pulso firme",
          "desc": "La pistola dispersa la mitad al disparar.",
-         "puntos": 10, "dinero": 380},
+         "puntos": 30, "dinero": 380},
         {"id": "balas", "nombre": "Balas caseras",
          "desc": "El daño de la pistola sube de 25 a 40.",
-         "puntos": 16, "dinero": 700},
+         "puntos": 50, "dinero": 700},
         {"id": "piel", "nombre": "Piel dura",
          "desc": "Cuerpo de guerra: vida máxima 200 (te cura +60 "
                  "al comprarla).",
-         "puntos": 26, "dinero": 1300},
+         "puntos": 80, "dinero": 1300},
     ]},
     {"nombre": "SIGILO", "color": (130, 170, 230), "nodos": [
         {"id": "perfil", "nombre": "Perfil bajo",
          "desc": "Los inspectores te ven un 25% menos lejos.",
-         "puntos": 5, "dinero": 180},
+         "puntos": 15, "dinero": 180},
         {"id": "pies", "nombre": "Pies ligeros",
          "desc": "Caminás un 15% más rápido.",
-         "puntos": 10, "dinero": 380},
+         "puntos": 30, "dinero": 380},
         {"id": "fantasma", "nombre": "Fantasma",
          "desc": "El nivel de búsqueda se enfría el doble de rápido.",
-         "puntos": 16, "dinero": 600},
+         "puntos": 50, "dinero": 600},
         {"id": "sombra", "nombre": "Sombra urbana",
          "desc": "Nadie te registra: los inspectores te ven la MITAD "
                  "de lejos (reemplaza el 25%).",
-         "puntos": 26, "dinero": 1000},
+         "puntos": 80, "dinero": 1000},
     ]},
 ]
 

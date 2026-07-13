@@ -33,9 +33,9 @@
 # =========================================================
 
 # --- Curva de coste (el rebalanceo vive en estas dos líneas) ---
-# prof1=100, prof2=220, prof3=484, prof4=1065, prof5=2343:
-# exigente al fondo del árbol pero arrancar no es un suplicio.
-COSTE_BASE = 100          # XP del primer nodo de cada tronco
+# prof1=15, prof2=33, prof3=73, prof4=160, prof5=352:
+# entrar al negocio es accesible; el fondo del árbol se lo gana.
+COSTE_BASE = 15           # XP del primer nodo de cada tronco
 MULT_EXPONENCIAL = 2.2    # crecimiento por nivel de profundidad
 
 

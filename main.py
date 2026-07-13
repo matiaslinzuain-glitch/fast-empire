@@ -740,16 +740,9 @@ class Juego:
                 self.proveedor.irse()
         elif id_dialogo == "proveedor_mision":
             self.mision = self._generar_mision()
-            if self.mision is not None:
-                self.aviso = ("MISIÓN", self.mision["desc"]
-                              + f" — recompensa ${self.mision['recompensa']}")
-                self.aviso_timer = 3.2
-            else:
-                # Nada investigado aún: no hay trabajo que dar
-                self.aviso = ("SIN TRABAJO",
-                              "Investigá una receta en el árbol (R) y vuelvo")
-                self.aviso_timer = 3.2
-                self.timer_oferta = random.uniform(45.0, 70.0)
+            self.aviso = ("MISIÓN", self.mision["desc"]
+                          + f" — recompensa ${self.mision['recompensa']}")
+            self.aviso_timer = 3.2
             if self.proveedor is not None:
                 self.proveedor.irse()
         elif id_dialogo == "proveedor_receta":
@@ -773,7 +766,12 @@ class Juego:
         hay_quim = any(p.startswith("med_quim") for p in productos)
         nivel = len(self.arbol_meds.comprados)  # nodos investigados
         tipos = []
-        if productos:
+        if not productos:
+            # El primer laburo de todos: lo de las semillas. Vender
+            # naturales (la Tintura sale barata de investigar) con
+            # tiempo de sobra para plantar y craftear.
+            tipos.append("naturales")
+        else:
             tipos.append("reparto")
         if hay_quim:
             tipos.append("quimicos")
@@ -781,9 +779,13 @@ class Juego:
                        if r.zona_id is not None]
         if zonas_vivas:
             tipos.append("limpieza")
-        if not tipos:
-            return None
         tipo = random.choice(tipos)
+        if tipo == "naturales":
+            n = random.randint(2, 3)
+            return {"tipo": tipo, "objetivo": n, "progreso": 0,
+                    "timer": 300.0, "recompensa": 45 * n,
+                    "puntos": 5 * n,
+                    "desc": f"Vendé {n} medicamentos naturales"}
         if tipo == "reparto":
             n = random.randint(3, 5) + nivel // 3
             return {"tipo": tipo, "objetivo": n, "progreso": 0,
@@ -1084,6 +1086,10 @@ class Juego:
             elif (self.mision["tipo"] == "quimicos"
                     and trato.tipo.startswith("med_quim")):
                 # Cualquier tier sintético cuenta (T1, T2 o T3)
+                self._avanzar_mision(vendidas)
+            elif (self.mision["tipo"] == "naturales"
+                    and trato.tipo.startswith("med_nat")):
+                # El laburo inicial: cualquier tier natural cuenta
                 self._avanzar_mision(vendidas)
 
     # -----------------------------------------------------
