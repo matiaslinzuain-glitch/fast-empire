@@ -1603,7 +1603,7 @@ class Juego:
         self.timer_refuerzo = 0.0
         refuerzo = crear_policia(
             self.mapa, 1, lejos_de=pygame.Vector2(self.jugador.rect.center),
-            radio_px=500)
+            radio_px=1000)
         if refuerzo:
             self.inspectores += refuerzo
 
@@ -2132,7 +2132,7 @@ class Juego:
             self.ciudadanos += crear_ciudadanos(
                 self.mapa, 1,
                 lejos_de=pygame.Vector2(self.jugador.rect.center),
-                radio_px=450)
+                radio_px=900)
 
         # Inspectores (si es que hay)
         for inspector in self.inspectores:

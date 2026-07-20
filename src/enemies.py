@@ -346,7 +346,7 @@ class InspectorSanitario(Enemigo):
         aprenderse — nunca sabés por dónde va a aparecer."""
         if self.objetivo_ronda is None or self._navegar_hacia(
                 self.objetivo_ronda, dt, mapa, paredes,
-                self.velocidad * 0.55) < 10:
+                self.velocidad * 0.55) < 20:
             self.objetivo_ronda = tile_exterior_cerca(
                 mapa, self.rect.center, self.RADIO_RONDA)
 
@@ -538,7 +538,7 @@ RUTAS_INSPECTORES = [
 ]
 
 
-def crear_policia(mapa, cantidad, lejos_de=None, radio_px=380):
+def crear_policia(mapa, cantidad, lejos_de=None, radio_px=760):
     """La DOTACIÓN PERMANENTE: inspectores en ronda libre repartidos
     por las calles de la ciudad (siempre están, como cualquier NPC).
     `lejos_de` (px) evita que aparezcan encima del jugador."""
