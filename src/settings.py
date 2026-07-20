@@ -14,13 +14,18 @@ FPS = 60
 TITULO = "Fast Empire — Fase 11"
 
 # --- Mundo ---
-# El MUNDO se dibuja en un lienzo del doble de resolución que la
-# UI (1920x1080 con tiles de 64), así los edificios y sprites en
-# alta resolución muestran su detalle. ESCALA_MUNDO relaciona los
-# dos espacios: px de mundo = px de UI * ESCALA_MUNDO.
-ESCALA_MUNDO = 2
-ANCHO_LIENZO = ANCHO_VENTANA * ESCALA_MUNDO   # 1920
-ALTO_LIENZO = ALTO_VENTANA * ESCALA_MUNDO     # 1080
+# El MUNDO se dibuja en un lienzo de alta resolución aparte de la
+# UI, así los edificios y sprites detallados se ven nítidos.
+# ZOOM_MUNDO acerca la cámara: con 1.0 se ven 30 tiles de ancho
+# (encuadre original, lienzo de 1920x1080); con 1.5 se ven 20 y
+# todo se ve un 50% más grande. Ajustable a gusto.
+ZOOM_MUNDO = 1.5
+# ESCALA_MUNDO relaciona los dos espacios: px de mundo (lienzo) =
+# px de UI * ESCALA_MUNDO. Con zoom 1.5 el lienzo queda en 1280x720
+# y se estira a la pantalla.
+ESCALA_MUNDO = 2 / ZOOM_MUNDO
+ANCHO_LIENZO = round(ANCHO_VENTANA * ESCALA_MUNDO)   # 1280
+ALTO_LIENZO = round(ALTO_VENTANA * ESCALA_MUNDO)     # 720
 TILE = 64  # tamaño de cada casillero del mapa en píxeles
 
 # Capas "por encima" del mapa de Tiled (techos, copas, toldos):
