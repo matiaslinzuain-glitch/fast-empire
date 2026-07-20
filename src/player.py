@@ -104,7 +104,7 @@ class Jugador:
 
         if self.apuntando:
             pygame.draw.line(superficie, COLOR_MIRA, centro,
-                             centro + self.direccion_mira * 95, 1)
+                             centro + self.direccion_mira * 190, 2)
 
         dibujar_personaje(superficie, r, PALETA_WALTER, self,
                           mirando_izq=self.direccion_mira.x < 0)
@@ -117,7 +117,7 @@ class Jugador:
                 # la rotación deja la pistola cabeza abajo.
                 img = pygame.transform.flip(arma_img, False, True)
             rotada = pygame.transform.rotate(img, angulo)
-            pos_arma = centro + self.direccion_mira * 16
+            pos_arma = centro + self.direccion_mira * 32
             rect_arma = rotada.get_rect(
                 center=(int(pos_arma.x), int(pos_arma.y)))
             superficie.blit(rotada, rect_arma)

@@ -521,7 +521,7 @@ class Caja:
     """Paquete entregado en la puerta del local. Se junta con E."""
 
     def __init__(self, x, y, contenido, nombre):
-        self.rect = pygame.Rect(int(x), int(y), 22, 18)
+        self.rect = pygame.Rect(int(x), int(y), 44, 36)
         self.contenido = contenido
         self.nombre = nombre
 
@@ -530,9 +530,9 @@ class Caja:
         pygame.draw.rect(superficie, COLOR_CAJA, r)
         # Cinta de embalaje en cruz
         pygame.draw.rect(superficie, COLOR_CAJA_CINTA,
-                         (r.centerx - 2, r.y, 4, r.height))
+                         (r.centerx - 4, r.y, 8, r.height))
         pygame.draw.rect(superficie, COLOR_CAJA_CINTA,
-                         (r.x, r.centery - 2, r.width, 4))
+                         (r.x, r.centery - 4, r.width, 8))
 
 
 # --- La Red de venta: zonas, matones y vendedores ---

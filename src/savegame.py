@@ -101,7 +101,9 @@ def guardar(juego):
     datos = {
         # v5: muebles_mundo lista TODOS los muebles colocados
         # (incluidos la maceta y el laboratorio heredados del sótano)
-        "version": 5,
+        # v6: el mundo pasó a tiles de 64px (antes 32): las posiciones
+        # en píxeles de partidas anteriores se duplican al cargar
+        "version": 6,
         "nombre": juego.nombre_partida,
         "fecha": time.strftime("%Y-%m-%d %H:%M"),
         "economia": {campo: getattr(juego.economia, campo)
@@ -164,6 +166,10 @@ def borrar(ruta):
 def aplicar(juego, datos):
     """Restaura una partida sobre un mundo recién creado
     (main.py llama a nueva_partida() antes)."""
+    # Migración v6: hasta la v5 el mundo usaba tiles de 32px; ahora
+    # son de 64. Todo lo guardado en píxeles se duplica para caer en
+    # el mismo lugar del mapa (lo guardado en tiles no cambia).
+    esc = 1 if datos.get("version", 1) >= 6 else 2
     economia = juego.economia
     for campo in CAMPOS_ECONOMIA:
         if campo in datos["economia"]:
@@ -189,7 +195,7 @@ def aplicar(juego, datos):
     juego.montado = bool(mundo_v.get("montado")) and bool(economia.vehiculo)
     pos_v = mundo_v.get("pos")
     if economia.vehiculo and not juego.montado:
-        juego.vehiculo_pos = (tuple(pos_v) if pos_v
+        juego.vehiculo_pos = ((pos_v[0] * esc, pos_v[1] * esc) if pos_v
                               else (9.2 * TILE, 10.5 * TILE))
     else:
         juego.vehiculo_pos = None
@@ -239,6 +245,7 @@ def aplicar(juego, datos):
     # Posición: si quedó dentro de una pared (guardó con el modo
     # debug puesto), reaparece en el local
     x, y = datos["jugador"]["pos"]
+    x, y = x * esc, y * esc
     rect = juego.jugador.rect
     if juego.mapa.es_solido_en(x + rect.w / 2, y + rect.h / 2):
         x, y = POSICION_INICIAL
@@ -278,6 +285,7 @@ def aplicar(juego, datos):
     juego.pedidos = [{"id": p["id"], "timer": p["timer"]}
                      for p in datos.get("pedidos", [])
                      if p["id"] in PEDIDOS]
-    juego.cajas = [Caja(c["x"], c["y"], c["contenido"], c["nombre"])
+    juego.cajas = [Caja(c["x"] * esc, c["y"] * esc,
+                        c["contenido"], c["nombre"])
                    for c in datos.get("cajas", [])]
     juego.camara.actualizar(juego.jugador.rect)

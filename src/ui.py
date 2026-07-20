@@ -21,7 +21,7 @@ import pygame
 from pathlib import Path
 
 from .settings import (
-    ANCHO_VENTANA, ALTO_VENTANA, TILE,
+    ANCHO_VENTANA, ALTO_VENTANA, TILE, ESCALA_MUNDO,
     COLOR_FONDO, COLOR_TEXTO, COLOR_TEXTO_SUAVE,
     COLOR_ORO, COLOR_DINERO, COLOR_TARJETA, COLOR_ERROR,
     COLOR_VIDA, COLOR_VIDA_FONDO,
@@ -241,7 +241,11 @@ class SuperficieUI:
         # En macOS nuevos el lienzo tiene canal alfa real y los paneles
         # semitransparentes dejan alfa 0: el blit del texto ahí copia
         # crudo (bloques sólidos). Se fuerza alfa opaco antes del texto.
-        self.raw.fill((0, 0, 0, 255), special_flags=pygame.BLEND_RGBA_MAX)
+        # OJO: solo en lienzos opacos — la capa de la UI es SRCALPHA
+        # de verdad (transparente sobre el mundo) y este relleno la
+        # volvería negra opaca.
+        if not (self.raw.get_flags() & pygame.SRCALPHA):
+            self.raw.fill((0, 0, 0, 255), special_flags=pygame.BLEND_RGBA_MAX)
         for texto, x, y in self.textos:
             texto.dibujar_logico(self.raw, x, y)
         self.textos.clear()
@@ -270,14 +274,17 @@ class TextoFlotante:
         self.vida = 1.2  # segundos
 
     def actualizar(self, dt):
-        self.pos.y -= 26 * dt
+        self.pos.y -= 52 * dt   # px de MUNDO por segundo
         self.vida -= dt
 
     def dibujar(self, superficie, camara, fuente):
+        """El texto vive en px de mundo pero se dibuja en la capa de
+        la UI (que es ESCALA_MUNDO más chica que el lienzo del mundo)."""
         img = fuente.render(self.texto, True, self.color)
         img.set_alpha(max(0, min(255, int(self.vida * 400))))
         r = camara.aplicar(pygame.Rect(int(self.pos.x), int(self.pos.y), 1, 1))
-        superficie.blit(img, (r.x - img.get_width() // 2, r.y))
+        superficie.blit(img, (r.x / ESCALA_MUNDO - img.get_width() // 2,
+                              r.y / ESCALA_MUNDO))
 
 
 # ---------------------------------------------------------

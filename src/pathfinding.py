@@ -118,7 +118,7 @@ class Navegante:
     atascos (si casi no se movió, recalcula)."""
 
     REPLAN = 0.9        # segundos entre replaneos hacia blancos móviles
-    UMBRAL_ATASCO = 3.0  # px de avance mínimo por chequeo
+    UMBRAL_ATASCO = 6.0  # px de avance mínimo por chequeo
 
     def __init__(self):
         self.camino = []

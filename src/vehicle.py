@@ -73,7 +73,7 @@ class FisicaVehiculo:
         # Doblar: parado no gira, despacio dobla menos (el volante
         # "agarra" con velocidad) y en reversa se invierte, como al
         # estacionar de verdad.
-        if abs(self.rapidez) > 5:
+        if abs(self.rapidez) > 10:
             factor = min(1.0, abs(self.rapidez) / (0.35 * vel_max))
             giro = GIRO_VEHICULO * datos.get("giro", 1.0) * factor * dt
             sentido = 1.0 if self.rapidez >= 0 else -1.0

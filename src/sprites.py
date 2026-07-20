@@ -45,9 +45,9 @@ PLANTILLA_PASO = PLANTILLA_QUIETO[:11] + [
     "............",
 ]
 
-ESCALA = 2
-ANCHO_SPRITE = 12 * ESCALA   # 24
-ALTO_SPRITE = 16 * ESCALA    # 32
+ESCALA = 4                   # con TILE=64 el personaje ocupa 48x64
+ANCHO_SPRITE = 12 * ESCALA   # 48
+ALTO_SPRITE = 16 * ESCALA    # 64
 MS_POR_PASO = 160            # velocidad de la caminata
 
 COLOR_OJOS = (18, 16, 18)
@@ -128,9 +128,9 @@ _ARCHIVOS_VEHICULOS = {
     "auto": "auto.png",
     "camioneta": "pickup.png",
 }
-# Largo en píxeles de juego (TILE=32): la moto ~1.3 tiles, el
+# Largo en píxeles de juego (TILE=64): la moto ~1.3 tiles, el
 # auto ~2 y la camioneta ~2.5, como los vehículos del GTA 1.
-ANCHO_VEHICULO = {"moto": 42, "auto": 68, "camioneta": 80}
+ANCHO_VEHICULO = {"moto": 84, "auto": 136, "camioneta": 160}
 
 
 def _imagen_vehiculo(tipo):
@@ -220,21 +220,21 @@ def dibujar_mueble(superficie, tipo, rect):
         # Terracota con tierra (la planta la dibuja main.py encima
         # según el estado del cultivo, igual que en el sótano)
         pygame.draw.polygon(superficie, (150, 88, 52),
-                            [(rect.x + 6, rect.y + 12),
-                             (rect.right - 6, rect.y + 12),
-                             (rect.right - 10, rect.bottom - 4),
-                             (rect.x + 10, rect.bottom - 4)])
+                            [(rect.x + 12, rect.y + 24),
+                             (rect.right - 12, rect.y + 24),
+                             (rect.right - 20, rect.bottom - 8),
+                             (rect.x + 20, rect.bottom - 8)])
         pygame.draw.rect(superficie, (70, 50, 34),
-                         (rect.x + 8, rect.y + 12, rect.width - 16, 5))
+                         (rect.x + 16, rect.y + 24, rect.width - 32, 10))
     else:  # mesa_lab
         # Mesada metálica con frascos violetas (como el tile l)
         pygame.draw.rect(superficie, (88, 92, 104),
-                         (rect.x + 2, rect.y + 10, rect.width - 4,
-                          rect.height - 14))
+                         (rect.x + 4, rect.y + 20, rect.width - 8,
+                          rect.height - 28))
         pygame.draw.rect(superficie, (150, 90, 190),
-                         (rect.x + 7, rect.y + 4, 6, 10))
+                         (rect.x + 14, rect.y + 8, 12, 20))
         pygame.draw.rect(superficie, (120, 70, 160),
-                         (rect.x + 18, rect.y + 6, 6, 8))
+                         (rect.x + 36, rect.y + 12, 12, 16))
 
 
 def dibujar_personaje(superficie, rect_pantalla, paleta, entidad,

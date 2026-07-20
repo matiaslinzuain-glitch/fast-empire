@@ -30,6 +30,7 @@ import pygame
 
 from src.settings import (
     ANCHO_VENTANA, ALTO_VENTANA, FPS, TITULO, TILE,
+    ANCHO_LIENZO, ALTO_LIENZO, ESCALA_MUNDO,
     POSICION_INICIAL, VELOCIDAD_JUGADOR, TAM_JUGADOR, COLOR_FONDO,
     COLOR_ORO, COLOR_DINERO, COLOR_ERROR, COLOR_TEXTO_SUAVE,
     COLOR_PUNTO, COLOR_CONO, COLOR_CONO_ALERTA,
@@ -102,9 +103,9 @@ RADIO_INTERACCION = TILE * 2
 RECT_CONTENEDOR = pygame.Rect(PUNTO_CONTENEDOR[0] * TILE,
                               PUNTO_CONTENEDOR[1] * TILE, TILE, TILE)
 # Distancia a la que los inspectores escuchan un disparo
-ALCANCE_RUIDO_DISPARO = 340
+ALCANCE_RUIDO_DISPARO = 680
 # Distancia a la que los NPCs entran en pánico por la violencia
-ALCANCE_PANICO = 300
+ALCANCE_PANICO = 600
 DURACION_AVISO = 2.6
 SEGUNDOS_AUTOSAVE = 60.0  # guardado automático durante la partida
 # La ciudad viva: dotación policial permanente, vecinos y tránsito
@@ -143,8 +144,13 @@ class Juego:
         # y el TEXTO de la interfaz se renderiza aparte a resolución
         # nativa vía SuperficieUI, así queda nítido (ver src/ui.py).
         self._crear_ventana()
-        self.pantalla = pygame.Surface((ANCHO_VENTANA, ALTO_VENTANA)).convert()
-        self.sup_ui = SuperficieUI(self.pantalla)
+        self.pantalla = pygame.Surface((ANCHO_LIENZO, ALTO_LIENZO)).convert()
+        # La interfaz se dibuja aparte, en su lienzo lógico de 960x540
+        # con transparencia, y se estira por encima del mundo. Así los
+        # menús/HUD quedan idénticos aunque el mundo tenga más detalle.
+        self.lienzo_ui = pygame.Surface((ANCHO_VENTANA, ALTO_VENTANA),
+                                        pygame.SRCALPHA)
+        self.sup_ui = SuperficieUI(self.lienzo_ui)
         pygame.display.set_caption(TITULO)
         self.audio = Audio()
         self.audio.iniciar_musica()
@@ -179,9 +185,9 @@ class Juego:
         self.hud = HUD()
         self.fuente_mundo = FuenteUI(22)
         self.fuente_mini = FuenteUI(16)
-        self.capa_conos = pygame.Surface((ANCHO_VENTANA, ALTO_VENTANA), pygame.SRCALPHA)
+        self.capa_conos = pygame.Surface((ANCHO_LIENZO, ALTO_LIENZO), pygame.SRCALPHA)
         self.mostrar_panel = True   # TAB lo alterna
-        self._gun_img = None        # sprite de pistola cacheado (16×16)
+        self._gun_img = None        # sprite de pistola cacheado (32×32)
         # Modo debug (menú principal): atravesar paredes.
         self.debug = False
         # True cuando hay una partida en marcha (para el autosave al salir)
@@ -707,8 +713,14 @@ class Juego:
         # en los monitores comunes)
         self.dx = (ancho - tam[0]) // 2
         self.dy = (alto - tam[1]) // 2
+        # El lienzo del MUNDO (1920x1080) se lleva al área visible:
+        # en ventana chica es una reducción 2:1, en 1080p va directo.
         self._lienzo_grande = (pygame.Surface(tam).convert()
-                               if self.escala != 1.0 else None)
+                               if tam != (ANCHO_LIENZO, ALTO_LIENZO)
+                               else None)
+        # La capa de la UI (960x540, con alfa) se estira a esa área
+        self._ui_grande = (pygame.Surface(tam, pygame.SRCALPHA)
+                           if self.escala != 1.0 else None)
         fijar_escala(self.escala)
 
     def _presentar(self):
@@ -716,30 +728,48 @@ class Juego:
         estirado (pixel art) + el texto de la UI a resolución nativa."""
         # macOS nuevos: paneles semitransparentes dejan alfa 0 en el
         # lienzo; al llegar a la ventana, el texto sobre esas zonas se
-        # copia crudo (bloques). Alfa opaco antes de componer.
-        self.pantalla.fill((0, 0, 0, 255),
-                           special_flags=pygame.BLEND_RGBA_MAX)
+        # copia crudo (bloques). Alfa opaco antes de componer — solo
+        # si el lienzo de verdad tiene canal alfa (en Windows/Linux
+        # no lo tiene y este fill costaría ~20 ms por frame al pedo).
+        if (self.pantalla.get_flags() & pygame.SRCALPHA
+                or self.pantalla.get_masks()[3]):
+            self.pantalla.fill((0, 0, 0, 255),
+                               special_flags=pygame.BLEND_RGBA_MAX)
         # Limpiar las franjas negras de la pantalla completa: si no,
         # quedan restos de frames viejos (letras cortadas en el borde)
         if self.dx or self.dy:
             self.ventana.fill((0, 0, 0))
         if self._lienzo_grande is None:
-            self.ventana.blit(self.pantalla, (0, 0))
+            self.ventana.blit(self.pantalla, (self.dx, self.dy))
         else:
             pygame.transform.scale(
                 self.pantalla, self._lienzo_grande.get_size(),
                 self._lienzo_grande)
             self.ventana.blit(self._lienzo_grande, (self.dx, self.dy))
+        # La interfaz encima del mundo (con su transparencia)
+        if self._ui_grande is None:
+            self.ventana.blit(self.lienzo_ui, (self.dx, self.dy))
+        else:
+            pygame.transform.scale(
+                self.lienzo_ui, self._ui_grande.get_size(),
+                self._ui_grande)
+            self.ventana.blit(self._ui_grande, (self.dx, self.dy))
         self.sup_ui.volcar(self.ventana, self.escala, self.dx, self.dy)
         pygame.display.flip()
 
     def _pos_logica(self, pos):
-        """Ventana real → coordenadas lógicas (960x540) del juego."""
+        """Ventana real → coordenadas lógicas (960x540) de la UI."""
         return ((pos[0] - self.dx) / self.escala,
                 (pos[1] - self.dy) / self.escala)
 
+    def _pos_lienzo(self, pos):
+        """Ventana real → píxeles del lienzo del MUNDO (1920x1080).
+        Falta sumarle el offset de la cámara para llegar a mundo."""
+        x, y = self._pos_logica(pos)
+        return (x * ESCALA_MUNDO, y * ESCALA_MUNDO)
+
     def _cargar_gun(self):
-        """Carga y cachea el sprite de la pistola escalado a 16×16."""
+        """Carga y cachea el sprite de la pistola escalado a 32×32."""
         if self._gun_img is None:
             from pathlib import Path
             ruta = Path("assets/sprites/icono_arma.png")
@@ -748,7 +778,7 @@ class Juego:
                 # El PNG apunta a la izquierda; el código de rotación
                 # asume ángulo 0 = derecha, así que se espeja al cargar.
                 img = pygame.transform.flip(img, True, False)
-                self._gun_img = pygame.transform.smoothscale(img, (16, 16))
+                self._gun_img = pygame.transform.smoothscale(img, (32, 32))
         return self._gun_img
 
     def _fin_dialogo(self, id_dialogo):
@@ -1856,7 +1886,7 @@ class Juego:
         if self.economia.tiene_repositor and self.repositor_npc is None:
             # Su puesto: pegado al contenedor que llena
             puesto = (RECT_CONTENEDOR.centerx,
-                      RECT_CONTENEDOR.bottom + 14)
+                      RECT_CONTENEDOR.bottom + 28)
             self.repositor_npc = RepositorNPC(puesto, PUNTO_PUERTA)
         elif not self.economia.tiene_repositor:
             self.repositor_npc = None
@@ -1939,7 +1969,7 @@ class Juego:
         self.reloj_juego.actualizar(dt)
 
         # Apuntado con mouse (pasado a coordenadas de mundo)
-        mouse = (pygame.Vector2(self._pos_logica(pygame.mouse.get_pos()))
+        mouse = (pygame.Vector2(self._pos_lienzo(pygame.mouse.get_pos()))
                  + self.camara.offset)
         mira = mouse - pygame.Vector2(self.jugador.rect.center)
         if mira.length_squared() > 0:
@@ -2375,6 +2405,9 @@ class Juego:
     # Dibujo (según estado)
     # -----------------------------------------------------
     def _dibujar(self):
+        # La capa de la UI se limpia cada frame (es transparente y
+        # se compone encima del mundo en _presentar)
+        self.lienzo_ui.fill((0, 0, 0, 0))
         if self.estado == "menu":
             self.menu.dibujar(self.sup_ui)
         elif self.estado == "nombre":
@@ -2441,7 +2474,7 @@ class Juego:
             # Tu vehículo, estacionado donde lo dejaste (F lo maneja)
             punto = self.camara.aplicar(self._rect_vehiculo())
             dibujar_vehiculo(self.pantalla, self.economia.vehiculo,
-                             punto.centerx, punto.bottom - 2,
+                             punto.centerx, punto.bottom - 4,
                              mirando_izq=getattr(self, "_vehiculo_izq",
                                                  True))
         self._dibujar_contenedor()
@@ -2521,14 +2554,18 @@ class Juego:
         r = self.camara.aplicar(RECT_CONTENEDOR)
         if not r.colliderect(self.pantalla.get_rect()):
             return
-        caja = pygame.Rect(0, 0, 20, 16)
+        caja = pygame.Rect(0, 0, 40, 32)
         caja.center = r.center
         pygame.draw.rect(self.pantalla, (180, 130, 70), caja)
-        pygame.draw.rect(self.pantalla, (120, 84, 44), caja, 1)
+        pygame.draw.rect(self.pantalla, (120, 84, 44), caja, 2)
         etiqueta = self.fuente_mini.render(
             f"[{self.economia.contenedor_ing}]", True, COLOR_ORO)
-        self.sup_ui.blit(etiqueta, (caja.centerx - etiqueta.get_width() // 2,
-                                    caja.y - 14))
+        # El texto va a la capa de la UI (espacio 960x540): las
+        # coordenadas del mundo se dividen por ESCALA_MUNDO
+        self.sup_ui.blit(etiqueta,
+                         (caja.centerx / ESCALA_MUNDO
+                          - etiqueta.get_width() // 2,
+                          caja.y / ESCALA_MUNDO - 14))
 
     def _dibujar_muebles(self):
         """Los muebles colocados en el mundo: el sprite sobre el piso
@@ -2543,31 +2580,32 @@ class Juego:
             if mueble.tipo == "maceta" and mueble.timer is not None:
                 # La planta se ve crecer, como en el sótano
                 if mueble.timer == LISTA:
-                    alto = 12
+                    alto = 24
                 else:
-                    alto = max(2, int(12 * (1 - mueble.timer
+                    alto = max(4, int(24 * (1 - mueble.timer
                                             / SEGUNDOS_PLANTA)))
                 pygame.draw.line(self.pantalla, (90, 170, 90),
-                                 (r.centerx, r.y + 12),
-                                 (r.centerx, r.y + 12 - alto), 2)
-                if alto > 5:
+                                 (r.centerx, r.y + 24),
+                                 (r.centerx, r.y + 24 - alto), 4)
+                if alto > 10:
                     pygame.draw.circle(self.pantalla, (110, 200, 110),
-                                       (r.centerx, r.y + 12 - alto), 3)
+                                       (r.centerx, r.y + 24 - alto), 6)
             if mueble.timer == LISTA:
                 if (pygame.time.get_ticks() // 350) % 2 == 0:
                     img = self.fuente_mundo.render("¡LISTO!", True,
                                                    COLOR_ORO)
                     self.sup_ui.blit(img,
-                                     (r.centerx - img.get_width() // 2,
-                                      r.y - 20))
+                                     (r.centerx / ESCALA_MUNDO
+                                      - img.get_width() // 2,
+                                      r.y / ESCALA_MUNDO - 20))
             elif mueble.timer is not None:
                 progreso = 1 - mueble.timer / mueble.total
                 pygame.draw.rect(self.pantalla, (20, 18, 24),
-                                 (r.x + 2, r.y - 8, r.width - 4, 5))
+                                 (r.x + 4, r.y - 16, r.width - 8, 10))
                 pygame.draw.rect(self.pantalla, COLOR_DINERO,
-                                 (r.x + 3, r.y - 7,
-                                  int((r.width - 6) * max(0.0, progreso)),
-                                  3))
+                                 (r.x + 6, r.y - 14,
+                                  int((r.width - 12) * max(0.0, progreso)),
+                                  6))
 
     def _dibujar_encuentros(self):
         """Marca violeta sobre la zona del/los tratos en curso."""
@@ -2578,19 +2616,20 @@ class Juego:
             velo = pygame.Surface(rect.size, pygame.SRCALPHA)
             velo.fill((*COLOR_PUNTO, 20))
             self.pantalla.blit(velo, rect)
-            pygame.draw.rect(self.pantalla, COLOR_PUNTO, rect, 1)
+            pygame.draw.rect(self.pantalla, COLOR_PUNTO, rect, 2)
             etiqueta = self.fuente_mundo.render(
                 f"{trato.nombre_lugar} — "
                 f"{self.reloj_juego.texto_hora(trato.minuto_cita)}",
                 True, COLOR_PUNTO)
-            self.sup_ui.blit(etiqueta, (rect.x + 5, rect.y + 4))
+            self.sup_ui.blit(etiqueta, (rect.x / ESCALA_MUNDO + 5,
+                                        rect.y / ESCALA_MUNDO + 4))
 
     def _dibujar_flecha_encuentro(self):
         """Flecha hacia el encuentro activo (o el próximo trato)."""
         trato = self._proximo_trato()
         if trato is None:
             return
-        centro_pantalla = pygame.Vector2(ANCHO_VENTANA / 2, ALTO_VENTANA / 2)
+        centro_pantalla = pygame.Vector2(ANCHO_LIENZO / 2, ALTO_LIENZO / 2)
         destino = pygame.Vector2(trato.rect.center) - self.camara.offset
         if self.pantalla.get_rect().collidepoint(destino):
             return
@@ -2598,12 +2637,12 @@ class Juego:
         if direccion.length_squared() == 0:
             return
         direccion = direccion.normalize()
-        pos = centro_pantalla + direccion * 1000
-        pos.x = max(24, min(ANCHO_VENTANA - 24, pos.x))
-        pos.y = max(70, min(ALTO_VENTANA - 24, pos.y))
-        lado = direccion.rotate(90) * 7
-        puntos = [pos + direccion * 12, pos - direccion * 4 + lado,
-                  pos - direccion * 4 - lado]
+        pos = centro_pantalla + direccion * 2000
+        pos.x = max(48, min(ANCHO_LIENZO - 48, pos.x))
+        pos.y = max(140, min(ALTO_LIENZO - 48, pos.y))
+        lado = direccion.rotate(90) * 14
+        puntos = [pos + direccion * 24, pos - direccion * 8 + lado,
+                  pos - direccion * 8 - lado]
         pygame.draw.polygon(self.pantalla, COLOR_PUNTO, puntos)
 
     def _dibujar_conos(self):
@@ -2632,7 +2671,9 @@ class Juego:
     def _signo(self, enemigo, caracter, color):
         r = self.camara.aplicar(enemigo.rect)
         img = self.fuente_mundo.render(caracter, True, color)
-        self.sup_ui.blit(img, (r.centerx - img.get_width() // 2, r.y - 22))
+        self.sup_ui.blit(img, (r.centerx / ESCALA_MUNDO
+                               - img.get_width() // 2,
+                               r.y / ESCALA_MUNDO - 22))
 
 
 def main():

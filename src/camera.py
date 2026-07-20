@@ -17,7 +17,7 @@
 
 import pygame
 
-from .settings import ANCHO_VENTANA, ALTO_VENTANA, CAMARA_SUAVIZADO
+from .settings import ANCHO_LIENZO, ALTO_LIENZO, CAMARA_SUAVIZADO
 
 
 class Camara:
@@ -36,8 +36,8 @@ class Camara:
         es suave (lerp, estilo GTA); sin `dt` salta seco — es lo que
         quieren los teleports. `adelanto` corre el punto de mira, p.ej.
         hacia donde viaja el auto para ver venir las esquinas."""
-        destino_x = rect_objetivo.centerx + adelanto[0] - ANCHO_VENTANA // 2
-        destino_y = rect_objetivo.centery + adelanto[1] - ALTO_VENTANA // 2
+        destino_x = rect_objetivo.centerx + adelanto[0] - ANCHO_LIENZO // 2
+        destino_y = rect_objetivo.centery + adelanto[1] - ALTO_LIENZO // 2
 
         if self.y_subsuelo is None:
             y_min, y_max = 0, self.alto_mapa
@@ -49,14 +49,14 @@ class Camara:
             y_min, y_max = 0, self.y_subsuelo
 
         # Clamp: no mostrar más allá de los bordes de la zona
-        destino_x = max(0, min(destino_x, self.ancho_mapa - ANCHO_VENTANA))
-        destino_y = max(y_min, min(destino_y, y_max - ALTO_VENTANA))
+        destino_x = max(0, min(destino_x, self.ancho_mapa - ANCHO_LIENZO))
+        destino_y = max(y_min, min(destino_y, y_max - ALTO_LIENZO))
 
         # Un destino a más de una pantalla es un teleport (sótano,
         # reaparición): ahí el lerp haría un paneo larguísimo por
         # todo el mapa, mejor saltar seco.
-        salto = (abs(destino_x - self.offset.x) > ANCHO_VENTANA
-                 or abs(destino_y - self.offset.y) > ALTO_VENTANA)
+        salto = (abs(destino_x - self.offset.x) > ANCHO_LIENZO
+                 or abs(destino_y - self.offset.y) > ALTO_LIENZO)
         if dt is None or salto:
             self.offset.update(destino_x, destino_y)
         else:

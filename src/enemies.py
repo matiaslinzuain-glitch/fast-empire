@@ -57,12 +57,12 @@ def tile_exterior_cerca(mapa, centro, radio_tiles):
 
 
 def hay_linea_de_vision(mapa, origen, destino):
-    """True si no hay paredes entre ambos puntos (muestreo cada ~14px
+    """True si no hay paredes entre ambos puntos (muestreo cada ~28px
     sobre la grilla del mapa, que es una consulta O(1) por punto)."""
     origen = pygame.Vector2(origen)
     destino = pygame.Vector2(destino)
     distancia = origen.distance_to(destino)
-    pasos = int(distancia // 14) + 1
+    pasos = int(distancia // 28) + 1
     for i in range(1, pasos):
         punto = origen.lerp(destino, i / pasos)
         if mapa.es_solido_en(punto.x, punto.y):
@@ -135,7 +135,7 @@ class Proyectil:
             self.muerto = True
 
     def dibujar(self, superficie, camara):
-        r = camara.aplicar(pygame.Rect(int(self.pos.x) - 2, int(self.pos.y) - 2, 4, 4))
+        r = camara.aplicar(pygame.Rect(int(self.pos.x) - 4, int(self.pos.y) - 4, 8, 8))
         pygame.draw.rect(superficie, COLOR_BALA, r)
 
 
@@ -143,7 +143,7 @@ class Proyectil:
 # Base común de enemigos
 # ---------------------------------------------------------
 class Enemigo:
-    TAM = (20, 24)
+    TAM = (40, 48)
 
     def __init__(self, x, y, vida, velocidad):
         self.pos = pygame.Vector2(x, y)
@@ -167,7 +167,7 @@ class Enemigo:
         Devuelve la distancia que faltaba antes de moverse."""
         hacia = pygame.Vector2(destino) - pygame.Vector2(self.rect.center)
         distancia = hacia.length()
-        if distancia > 2:
+        if distancia > 4:
             direccion = hacia.normalize()
             self.mirando = direccion
             mover_con_colisiones(self.pos, self.rect, direccion,
@@ -181,7 +181,7 @@ class Enemigo:
         más natural. Devuelve la distancia REAL al destino final."""
         centro = pygame.Vector2(self.rect.center)
         distancia = centro.distance_to(destino)
-        if distancia <= 2:
+        if distancia <= 4:
             return distancia
         if hay_linea_de_vision(mapa, self.rect.center, destino):
             self.navegante.limpiar()
@@ -197,9 +197,9 @@ class Enemigo:
 
     def _dibujar_cuerpo(self, superficie, r, color_ropa, color_cabeza):
         pygame.draw.rect(superficie, color_ropa,
-                         (r.x, r.y + 7, r.width, r.height - 7))
+                         (r.x, r.y + 14, r.width, r.height - 14))
         pygame.draw.rect(superficie, color_cabeza,
-                         (r.x + 4, r.y, r.width - 8, 9))
+                         (r.x + 8, r.y, r.width - 16, 18))
 
     def _dibujar_barra_vida(self, superficie, r):
         """Barrita sobre la cabeza, solo si está lastimado."""
@@ -207,8 +207,8 @@ class Enemigo:
             return
         ancho = r.width
         relleno = max(0, int(ancho * self.vida / self.vida_max))
-        pygame.draw.rect(superficie, COLOR_VIDA_FONDO, (r.x, r.y - 6, ancho, 3))
-        pygame.draw.rect(superficie, COLOR_VIDA, (r.x, r.y - 6, relleno, 3))
+        pygame.draw.rect(superficie, COLOR_VIDA_FONDO, (r.x, r.y - 12, ancho, 6))
+        pygame.draw.rect(superficie, COLOR_VIDA, (r.x, r.y - 12, relleno, 6))
 
 
 # ---------------------------------------------------------
@@ -216,8 +216,8 @@ class Enemigo:
 # ---------------------------------------------------------
 class InspectorSanitario(Enemigo):
     VIDA = 80
-    VELOCIDAD = 150
-    VISION = 190            # px base; crece con el nivel de búsqueda
+    VELOCIDAD = 300
+    VISION = 380            # px base; crece con el nivel de búsqueda
     MEDIO_ANGULO = 50       # apertura del cono a cada lado (grados)
     SEGUNDOS_PERDIDA = 4.5  # sin verte mientras persigue → pasa a buscar
     SEGUNDOS_BUSQUEDA = 12.0
@@ -288,7 +288,7 @@ class InspectorSanitario(Enemigo):
         `vision_mult` < 1 (habilidad Perfil bajo) les acorta la vista."""
         # La búsqueda alta los vuelve más rápidos y con mejor vista
         multiplicador = 1 + 0.09 * busqueda.nivel
-        self.vision_actual = (self.VISION + 22 * busqueda.nivel) * vision_mult
+        self.vision_actual = (self.VISION + 44 * busqueda.nivel) * vision_mult
         ve = self.ve_al_jugador(jugador, mapa)
         # Solo reaccionan si te ven EN FALTA: vendiendo, o con nivel
         # de búsqueda activo (ya te tienen fichado)
@@ -302,7 +302,7 @@ class InspectorSanitario(Enemigo):
                 self.timer_perdida += dt
             self._navegar_hacia(self.ultima_vista, dt, mapa, paredes,
                                 self.velocidad * multiplicador, movil=ve)
-            if self.rect.colliderect(jugador.rect.inflate(8, 8)):
+            if self.rect.colliderect(jugador.rect.inflate(16, 16)):
                 return "arresto"
             if self.timer_perdida > self.SEGUNDOS_PERDIDA:
                 self.estado = "buscar"
@@ -323,7 +323,7 @@ class InspectorSanitario(Enemigo):
             if ve and en_falta:
                 self._empezar_persecucion(jugador, vendiendo, busqueda)
             elif self._navegar_hacia(self.objetivo_investigar, dt, mapa,
-                                     paredes) < 10:
+                                     paredes) < 20:
                 self.timer_mirar += dt
                 if self.timer_mirar > 2.0:  # miró alrededor y no vio nada
                     self.timer_mirar = 0.0
@@ -335,7 +335,7 @@ class InspectorSanitario(Enemigo):
             elif self.ruta is None:
                 self._rondar(dt, mapa, paredes)
             elif self._navegar_hacia(self.ruta[self.indice], dt, mapa,
-                                     paredes) < 8:
+                                     paredes) < 16:
                 self.indice = (self.indice + 1) % len(self.ruta)
 
         return None
@@ -373,7 +373,7 @@ class InspectorSanitario(Enemigo):
         después patea tiles caminables al azar alrededor (con A*, así
         revisa de verdad en vez de frotarse contra una pared)."""
         if self.ultima_vista is not None:
-            if self._navegar_hacia(self.ultima_vista, dt, mapa, paredes) < 14:
+            if self._navegar_hacia(self.ultima_vista, dt, mapa, paredes) < 28:
                 self.objetivo_deambulo = None
                 self.ancla_busqueda = pygame.Vector2(self.ultima_vista)
                 self.ultima_vista = None
@@ -382,7 +382,7 @@ class InspectorSanitario(Enemigo):
             or pygame.Vector2(self.rect.center)
         if self.objetivo_deambulo is None or \
                 self._navegar_hacia(self.objetivo_deambulo, dt, mapa,
-                                    paredes) < 12:
+                                    paredes) < 24:
             # Elegir un tile caminable al azar cerca del ancla
             for _ in range(8):
                 col = int(ancla.x // TILE) + random.randint(
@@ -408,13 +408,13 @@ class RivalGastronomico(Enemigo):
     hueso duro: el triple de vida, pegan más fuerte, se mueven de
     costado mientras tirotean y te cazan con pathfinding."""
     VIDA = 150
-    VELOCIDAD = 150
-    RANGO_VISTA = 280       # ve en todas direcciones (conoce su territorio)
-    RANGO_DISPARO = 250
-    DISTANCIA_COMODA = 170  # no se acerca más que esto para tirotear
+    VELOCIDAD = 300
+    RANGO_VISTA = 560       # ve en todas direcciones (conoce su territorio)
+    RANGO_DISPARO = 500
+    DISTANCIA_COMODA = 340  # no se acerca más que esto para tirotear
     CADENCIA = 1.1
     DANO_BALA = 14
-    VELOCIDAD_BALA = 400
+    VELOCIDAD_BALA = 800
     SEGUNDOS_CAZA = 9.0
 
     def __init__(self, x, y, radio_hogar, zona_id=None):
@@ -506,7 +506,7 @@ class RivalGastronomico(Enemigo):
         """Pasea por su territorio eligiendo puntos al azar."""
         if self.objetivo_deambulo is None or \
                 self._ir_hacia(self.objetivo_deambulo, dt, paredes,
-                               self.velocidad * 0.5) < 8:
+                               self.velocidad * 0.5) < 16:
             angulo = random.uniform(0, 360)
             radio = random.uniform(0, self.radio_hogar)
             self.objetivo_deambulo = self.hogar + pygame.Vector2(radio, 0).rotate(angulo)

@@ -25,11 +25,11 @@ from .settings import COLOR_CAJA, COLOR_CAJA_CINTA, TILE
 from .sprites import (paleta_peaton, paleta_encapuchado, dibujar_personaje,
                       dibujar_vehiculo_conduciendo)
 
-VELOCIDAD_PEATON = 85        # px/s, más lento que Walter
-VELOCIDAD_PANICO = 150       # px/s huyendo
+VELOCIDAD_PEATON = 170       # px/s, más lento que Walter
+VELOCIDAD_PANICO = 300      # px/s huyendo
 SEGUNDOS_COMIENDO = 5.0
 PACIENCIA_FILA = 30.0        # segundos antes de irse sin comprar
-DISTANCIA_COMPRA = 30        # px al comprador para concretar el trato
+DISTANCIA_COMPRA = 60       # px al comprador para concretar el trato
 VIDA_NPC = 30                # puntos de vida de un civil
 
 # Ropa variada para que no parezcan clones
@@ -50,7 +50,7 @@ class _Peaton:
 
     def __init__(self, x, y, color_ropa):
         self.pos = pygame.Vector2(x, y)
-        self.rect = pygame.Rect(int(x), int(y), 18, 24)
+        self.rect = pygame.Rect(int(x), int(y), 36, 48)
         self.color_ropa = color_ropa
         self.paleta = paleta_peaton(color_ropa)
         self.terminado = False  # marcado para eliminar
@@ -76,9 +76,9 @@ class _Peaton:
 
     def _dibujar_cuerpo(self, superficie, r, color_cabeza=COLOR_PIEL):
         pygame.draw.rect(superficie, self.color_ropa,
-                         (r.x, r.y + 7, r.width, r.height - 7))
+                         (r.x, r.y + 14, r.width, r.height - 14))
         pygame.draw.rect(superficie, color_cabeza,
-                         (r.x + 4, r.y, r.width - 8, 9))
+                         (r.x + 8, r.y, r.width - 16, 18))
 
 
 class ClienteLocal(_Peaton):
@@ -107,15 +107,15 @@ class ClienteLocal(_Peaton):
         """Devuelve "harto" en el frame en que se cansó de esperar."""
         if self.estado == "huyendo":
             # Corre directo a su punto de entrada y desaparece
-            if self._avanzar_hacia(self.salida, dt, VELOCIDAD_PANICO) < 12:
+            if self._avanzar_hacia(self.salida, dt, VELOCIDAD_PANICO) < 24:
                 self.terminado = True
             return None
 
         if self.estado == "entrando":
-            if self._avanzar_hacia(self.frente_puerta, dt) < 10:
+            if self._avanzar_hacia(self.frente_puerta, dt) < 20:
                 self.estado = "cruzando"
         elif self.estado == "cruzando":
-            if self._avanzar_hacia(self.puerta, dt) < 10:
+            if self._avanzar_hacia(self.puerta, dt) < 20:
                 self.estado = "cola"
 
         elif self.estado == "cola":
@@ -127,26 +127,26 @@ class ClienteLocal(_Peaton):
                 return "harto"
 
         elif self.estado == "comiendo":
-            if self._avanzar_hacia(self.lugar, dt) < 6:
+            if self._avanzar_hacia(self.lugar, dt) < 12:
                 self.timer_comer -= dt
                 if self.timer_comer <= 0:
                     self.irse()
 
         elif self.estado == "saliendo":  # hacia la puerta desde adentro
-            if self._avanzar_hacia(self.puerta, dt) < 12:
+            if self._avanzar_hacia(self.puerta, dt) < 24:
                 self.estado = "yendose"
         elif self.estado == "yendose":   # cruzar el vano hacia la vereda
-            if self._avanzar_hacia(self.frente_puerta, dt) < 10:
+            if self._avanzar_hacia(self.frente_puerta, dt) < 20:
                 self.estado = "yendose2"
         else:  # yendose2: por la calle hasta desaparecer
-            if self._avanzar_hacia(self.salida, dt) < 10:
+            if self._avanzar_hacia(self.salida, dt) < 20:
                 self.terminado = True
         return None
 
     def listo_para_atender(self, posicion_frente):
         """True si está primero en la fila, quieto frente al mostrador."""
         return (self.estado == "cola" and
-                pygame.Vector2(self.rect.center).distance_to(posicion_frente) < 24)
+                pygame.Vector2(self.rect.center).distance_to(posicion_frente) < 48)
 
     def servir(self, lugar):
         """Fue atendido: se va a comer al lugar indicado."""
@@ -164,7 +164,7 @@ class ClienteLocal(_Peaton):
         # Platito en la mano mientras come
         if self.estado == "comiendo":
             pygame.draw.rect(superficie, COLOR_PLATO,
-                             (r.x + 1, r.y + 12, 9, 4))
+                             (r.x + 2, r.y + 24, 18, 8))
 
 
 class Proveedor(_Peaton):
@@ -186,7 +186,7 @@ class Proveedor(_Peaton):
     def actualizar(self, dt):
         if self.estado == "yendose":
             # Camina hacia el sur por la calle y desaparece
-            self._avanzar_hacia((self.rect.centerx, self.rect.centery + 400), dt)
+            self._avanzar_hacia((self.rect.centerx, self.rect.centery + 800), dt)
             self.timer_salida -= dt
             if self.timer_salida <= 0:
                 self.terminado = True
@@ -269,10 +269,10 @@ class CompradorIlegal(_Peaton):
             return
 
         if self.estado == "acercando":
-            if self._avanzar_hacia(self.punto_espera, dt) < 8:
+            if self._avanzar_hacia(self.punto_espera, dt) < 16:
                 self.estado = "esperando"
         elif self.estado == "saliendo":
-            if self._avanzar_hacia(self.origen, dt) < 6:
+            if self._avanzar_hacia(self.origen, dt) < 12:
                 self.terminado = True
         # "esperando": se queda parado mirando el reloj
 
@@ -305,7 +305,7 @@ class MozoNPC(_Peaton):
         super().__init__(0, 0, self.COLOR_DELANTAL)
         # Su puesto: el frente de la fila, corrido detrás del
         # mostrador (que no parezca un cliente más)
-        self.rect.center = (round(POSICIONES_FILA[0][0] - 20),
+        self.rect.center = (round(POSICIONES_FILA[0][0] - 40),
                             round(POSICIONES_FILA[0][1]))
         self.pos.update(self.rect.topleft)
         self.estado = "parado"   # parado | sirviendo
@@ -342,7 +342,7 @@ class ChefNPC(_Peaton):
     con lo que haya en el contenedor."""
 
     COLOR_DELANTAL = (200, 90, 60)    # rojo ladrillo
-    SEGUNDOS_VAIVEN = 0.8             # vaivén cosmético de ±3 px
+    SEGUNDOS_VAIVEN = 0.8             # vaivén cosmético de ±6 px
 
     def __init__(self, x, y):
         super().__init__(x, y, self.COLOR_DELANTAL)
@@ -375,13 +375,13 @@ class ChefNPC(_Peaton):
 
     def dibujar(self, superficie, camara):
         r = camara.aplicar(self.rect).move(
-            0, 3 if self._vaiven_abajo else 0)
+            0, 6 if self._vaiven_abajo else 0)
         dibujar_personaje(superficie, r, self.paleta, self)
         if self.estado == "cocinando":
             # Burbuja de vapor sobre la olla
-            vapor = pygame.Surface((8, 8), pygame.SRCALPHA)
+            vapor = pygame.Surface((16, 16), pygame.SRCALPHA)
             vapor.fill((255, 255, 255, 178))
-            superficie.blit(vapor, (r.centerx - 4, r.y - 10))
+            superficie.blit(vapor, (r.centerx - 8, r.y - 20))
 
 
 class RepositorNPC(_Peaton):
@@ -442,9 +442,9 @@ class RepositorNPC(_Peaton):
                 self.estado = "volviendo"
                 self._cruzo_puerta = False
             elif not self._cruzo_puerta:
-                if self._avanzar_hacia(self.puerta, dt) < 10:
+                if self._avanzar_hacia(self.puerta, dt) < 20:
                     self._cruzo_puerta = True
-            elif self._avanzar_hacia(self.caja.rect.center, dt) < 12:
+            elif self._avanzar_hacia(self.caja.rect.center, dt) < 24:
                 self.carga = sum(self.caja.contenido.values())
                 cajas.remove(self.caja)
                 self.caja = None
@@ -453,9 +453,9 @@ class RepositorNPC(_Peaton):
 
         elif self.estado == "volviendo":
             if not self._cruzo_puerta:
-                if self._avanzar_hacia(self.puerta, dt) < 10:
+                if self._avanzar_hacia(self.puerta, dt) < 20:
                     self._cruzo_puerta = True
-            elif self._avanzar_hacia(self.puesto, dt) < 8:
+            elif self._avanzar_hacia(self.puesto, dt) < 16:
                 if self.carga > 0:
                     self.estado = "descargando"
                     return "entrega"
@@ -475,10 +475,10 @@ class RepositorNPC(_Peaton):
         dibujar_personaje(superficie, r, self.paleta, self)
         # La caja en brazos mientras la lleva
         if self.carga > 0:
-            caja = pygame.Rect(r.x + 1, r.y + 9, 16, 11)
+            caja = pygame.Rect(r.x + 2, r.y + 18, 32, 22)
             pygame.draw.rect(superficie, COLOR_CAJA, caja)
             pygame.draw.rect(superficie, COLOR_CAJA_CINTA,
-                             (caja.centerx - 1, caja.y, 3, caja.height))
+                             (caja.centerx - 2, caja.y, 6, caja.height))
 
 
 # ---------------------------------------------------------
@@ -492,7 +492,7 @@ class Ciudadano(_Peaton):
     solo está el paseo, el pánico y la marca de "ya le ofrecí"."""
 
     def __init__(self, col, fila):
-        super().__init__(col * TILE + 4, fila * TILE + 2,
+        super().__init__(col * TILE + 8, fila * TILE + 4,
                          random.choice(COLORES_ROPA))
         self.estado = "pasear"          # pasear | huyendo
         self.tile = (col, fila)
@@ -543,7 +543,7 @@ class Ciudadano(_Peaton):
             return
         # El hitbox camina con su CENTRO hacia el centro del tile
         hacia = self.objetivo - pygame.Vector2(self.rect.center)
-        if hacia.length() < 4:
+        if hacia.length() < 8:
             self.tile = (int(self.objetivo.x) // TILE,
                          int(self.objetivo.y) // TILE)
             self.objetivo = None
@@ -557,7 +557,7 @@ class Ciudadano(_Peaton):
         dibujar_personaje(superficie, r, self.paleta, self)
 
 
-def crear_ciudadanos(mapa, cantidad, lejos_de=None, radio_px=200):
+def crear_ciudadanos(mapa, cantidad, lejos_de=None, radio_px=400):
     """Puebla la ciudad: ciudadanos en tiles exteriores al azar."""
     gente = []
     intentos = 0
@@ -583,14 +583,14 @@ class AutoNPC:
     azar en las intersecciones y frena si Walter (o su vehículo) se
     le cruza adelante. Decorativo pero vivo — no atropella."""
 
-    VELOCIDAD = 175
-    DISTANCIA_FRENO = 58    # px: frena si el jugador está a menos
+    VELOCIDAD = 350
+    DISTANCIA_FRENO = 116   # px: frena si el jugador está a menos
 
     def __init__(self, col, fila, tipo):
         self.tipo = tipo                       # "moto" | "auto" | "camioneta"
         self.pos = pygame.Vector2(col * TILE + TILE // 2,
                                   fila * TILE + TILE // 2)
-        self.rect = pygame.Rect(0, 0, 34, 26)
+        self.rect = pygame.Rect(0, 0, 68, 52)
         self.rect.center = self.pos
         self.direccion = random.choice([(1, 0), (-1, 0), (0, 1), (0, -1)])
         self.objetivo = None
@@ -636,7 +636,7 @@ class AutoNPC:
         if self.frenado:
             return
         hacia = self.objetivo - self.pos
-        if hacia.length() < 5:
+        if hacia.length() < 10:
             self._decidir_en_cruce(mapa)
             return
         self.pos += hacia.normalize() * self.VELOCIDAD * dt
@@ -648,7 +648,7 @@ class AutoNPC:
                                      self.angulo)
 
 
-def crear_transito(mapa, cantidad, lejos_de=None, radio_px=250):
+def crear_transito(mapa, cantidad, lejos_de=None, radio_px=500):
     """Los vehículos civiles, repartidos por las calles."""
     autos = []
     tipos = ["auto", "auto", "moto", "camioneta"]  # más autos que el resto

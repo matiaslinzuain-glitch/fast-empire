@@ -392,21 +392,31 @@ COL_CONCESIONARIA = 42
 _CONCES_EXHIBICION = {1: "moto", 4: "auto", 6: "camioneta"}  # col relativa
 _CONCES_PUERTA = 3
 # Donde te espera el vehículo recién comprado (frente a la puerta)
-PUNTO_CONCESIONARIA = ((COL_CONCESIONARIA + _CONCES_PUERTA + 0.5) * TILE,
-                       75.6 * TILE)
+PUNTO_CONCESIONARIA = [(COL_CONCESIONARIA + _CONCES_PUERTA + 0.5) * TILE,
+                       75.6 * TILE]
 
 # Frontera vertical ciudad/subsuelo (para la cámara por zonas)
 Y_SUBSUELO = FILAS_CIUDAD * TILE
 
+# =========================================================
+# Puntos de referencia (en píxeles de mundo).
+# OJO: estos valores son solo DEFAULTS. Al cargar el mapa,
+# Mapa._cargar_objetos() los PISA con los objetos de la capa
+# "objetos" del .tmx — por eso son listas y se mutan en su lugar:
+# los módulos que ya los importaron (main, npcs) ven el cambio.
+# Para mover un punto NO toques estos números: abrí ciudad.tmx en
+# Tiled, arrastrá el objeto y guardá.
+# =========================================================
+
 # Puntos del teletransporte local ↔ sótano (píxeles de mundo):
 # al bajar aparecés al lado de la escalera; al subir, junto a la
 # trampilla del local
-PUNTO_SOTANO = (4.3 * TILE, (_FILA_SOTANO + 1.2) * TILE)
-PUNTO_TRAMPILLA = (3.2 * TILE, 6.8 * TILE)
+PUNTO_SOTANO = [4.3 * TILE, (_FILA_SOTANO + 1.2) * TILE]
+PUNTO_TRAMPILLA = [3.2 * TILE, 6.8 * TILE]
 
 # --- Puntos de referencia del local (en píxeles de mundo) ---
-PUNTO_PUERTA = (5.5 * TILE, 8.5 * TILE)       # vano de la puerta
-PUNTO_ENTREGA = (4.6 * TILE, 9.4 * TILE)      # donde caen las cajas (vereda)
+PUNTO_PUERTA = [5.5 * TILE, 8.5 * TILE]       # vano de la puerta
+PUNTO_ENTREGA = [4.6 * TILE, 9.4 * TILE]      # donde caen las cajas (vereda)
 POSICIONES_FILA = [                            # la fila frente al mostrador
     (4.6 * TILE, 5.2 * TILE),
     (4.6 * TILE, 6.0 * TILE),
@@ -530,6 +540,43 @@ class Mapa:
             if lista is not None:
                 lista.append(rect)
 
+        # --- Capa "edificios" (opcional): estructuras enteras ---
+        # Casas/locales hechos como imágenes completas, cortadas en
+        # tiles CON transparencia: se dibujan ENCIMA del suelo (el
+        # pasto asoma en los bordes) pero DEBAJO de las entidades.
+        # Las props valen como en el suelo (solido corta el paso,
+        # char pinta el minimapa) y los tiles con techo=true se van
+        # con las capas de techo: tapan al jugador y se funden.
+        self.celdas_edificios = {}
+        techo_edificios = {}
+        try:
+            capa_ed = self.tmx.get_layer_by_name("edificios")
+        except ValueError:
+            capa_ed = None   # un .tmx sin la capa: nada que hacer
+        if capa_ed is not None:
+            for col, fila, gid in capa_ed:
+                if not gid:
+                    continue
+                imagen = self.tmx.get_tile_image_by_gid(gid)
+                props = props_por_gid.get(gid)
+                if props is None:
+                    props = self.tmx.get_tile_properties_by_gid(gid) or {}
+                    props_por_gid[gid] = props
+                if props.get("techo"):
+                    techo_edificios[(col, fila)] = imagen
+                    continue
+                self.celdas_edificios[(col, fila)] = imagen
+                if props.get("char"):
+                    chars[fila][col] = props["char"]
+                if not props.get("solido"):
+                    continue
+                self._solido[fila][col] = True
+                rect = pygame.Rect(col * TILE, fila * TILE, TILE, TILE)
+                self.paredes.append(rect)
+                lista = listas_por_tipo.get(props.get("tipo"))
+                if lista is not None:
+                    lista.append(rect)
+
         # Espejo ASCII de la grilla (mismo formato que el viejo MAPA;
         # lo usa el minimapa y sirve para debuggear)
         self.chars = ["".join(fila) for fila in chars]
@@ -540,9 +587,14 @@ class Mapa:
         # capa es un dict {(col, fila): imagen} solo con sus celdas
         # pintadas. Las capas ocultadas en Tiled (ojito) se ignoran.
         self.capas_techo = []
+        # Los techos de los edificios van primero (debajo de los
+        # techos "sueltos" del mapa, si se solapan)
+        if techo_edificios:
+            self.capas_techo.append(techo_edificios)
         for otra in self.tmx.visible_layers:
-            if otra.name == "suelo" or not hasattr(otra, "data"):
-                continue  # el suelo ya está cargado; los objetos no van
+            if (otra.name in ("suelo", "edificios")
+                    or not hasattr(otra, "data")):
+                continue  # suelo y edificios ya cargados; objetos no van
             celdas = {}
             for col, fila, gid in otra:
                 if gid:
@@ -573,6 +625,64 @@ class Mapa:
         self._alpha_grupos = {}
         self._techos_scratch = None
         self._techos_tick = None
+
+        # Los puntos y zonas editables desde Tiled pisan los defaults
+        self._cargar_objetos()
+
+    def _cargar_objetos(self):
+        """Lee la capa de objetos "objetos" del .tmx y PISA los puntos
+        de referencia del módulo (PUNTO_PUERTA, POSICIONES_FILA,
+        LUGARES_COMER, ...) y las zonas de venta (economy.LUGARES_VENTA)
+        con lo que haya dibujado en Tiled. Las listas se mutan en su
+        lugar para que los módulos que ya las importaron vean el
+        cambio. Si la capa no existe (un .tmx viejo), quedan los
+        defaults hardcodeados de arriba."""
+        try:
+            capa = self.tmx.get_layer_by_name("objetos")
+        except ValueError:
+            return
+
+        puntos = {}
+        fila, comer, entradas, zonas = [], [], [], []
+        for obj in capa:
+            tipo = obj.type or ""
+            if tipo == "Punto":
+                puntos[obj.name] = (obj.x, obj.y)
+            elif tipo == "PosicionFila":
+                orden = obj.properties.get("orden", len(fila))
+                fila.append((orden, (obj.x, obj.y)))
+            elif tipo == "LugarComer":
+                comer.append((obj.x, obj.y))
+            elif tipo == "EntradaCliente":
+                entradas.append((obj.x, obj.y))
+            elif tipo == "ZonaVenta":
+                # De px a tiles (LUGARES_VENTA vive en tiles). El
+                # "orden" importa: la Red usa el índice como zona_id,
+                # y las partidas guardadas se refieren a él.
+                orden = obj.properties.get("orden", len(zonas))
+                zonas.append((orden, (obj.name,
+                                      (obj.x / TILE, obj.y / TILE,
+                                       obj.width / TILE, obj.height / TILE))))
+
+        destinos = {"PuntoPuerta": PUNTO_PUERTA,
+                    "PuntoEntrega": PUNTO_ENTREGA,
+                    "PuntoSotano": PUNTO_SOTANO,
+                    "PuntoTrampilla": PUNTO_TRAMPILLA,
+                    "PuntoConcesionaria": PUNTO_CONCESIONARIA}
+        for nombre, destino in destinos.items():
+            if nombre in puntos:
+                destino[:] = puntos[nombre]
+        if fila:
+            POSICIONES_FILA[:] = [pos for _, pos in
+                                  sorted(fila, key=lambda f: f[0])]
+        if comer:
+            LUGARES_COMER[:] = comer
+        if entradas:
+            ENTRADAS_CLIENTES[:] = entradas
+        if zonas:
+            from .economy import LUGARES_VENTA
+            LUGARES_VENTA[:] = [z for _, z in
+                                sorted(zonas, key=lambda z: z[0])]
 
     def reemplazar_por_piso(self, col, fila, char_piso="s"):
         """Cambia la IMAGEN de una celda por la del piso indicado
@@ -643,6 +753,15 @@ class Mapa:
                 img = fila_img[col]
                 if img is not None:
                     superficie.blit(img, (col * TILE - ox, y))
+
+        # Los edificios (tiles con transparencia) sobre el suelo
+        if self.celdas_edificios:
+            for fila in range(fila_inicio, fila_fin):
+                y = fila * TILE - oy
+                for col in range(col_inicio, col_fin):
+                    img = self.celdas_edificios.get((col, fila))
+                    if img is not None:
+                        superficie.blit(img, (col * TILE - ox, y))
 
     def hay_techo_sobre(self, rect):
         """True si alguna celda de las capas de techo cubre el rect

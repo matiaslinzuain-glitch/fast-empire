@@ -6,15 +6,22 @@
 # =========================================================
 
 # --- Ventana ---
-# Resolución lógica 16:9: en pantalla completa escala EXACTO a
-# 1920x1080 (2x), sin bordes negros ni estiramiento.
+# Resolución lógica de la INTERFAZ (16:9): los menús, el HUD y el
+# celular se siguen dibujando en 960x540 y se estiran a la ventana.
 ANCHO_VENTANA = 960
 ALTO_VENTANA = 540
 FPS = 60
 TITULO = "Fast Empire — Fase 11"
 
 # --- Mundo ---
-TILE = 32  # tamaño de cada casillero del mapa en píxeles
+# El MUNDO se dibuja en un lienzo del doble de resolución que la
+# UI (1920x1080 con tiles de 64), así los edificios y sprites en
+# alta resolución muestran su detalle. ESCALA_MUNDO relaciona los
+# dos espacios: px de mundo = px de UI * ESCALA_MUNDO.
+ESCALA_MUNDO = 2
+ANCHO_LIENZO = ANCHO_VENTANA * ESCALA_MUNDO   # 1920
+ALTO_LIENZO = ALTO_VENTANA * ESCALA_MUNDO     # 1080
+TILE = 64  # tamaño de cada casillero del mapa en píxeles
 
 # Capas "por encima" del mapa de Tiled (techos, copas, toldos):
 # cuando una celda de esas capas tapa al jugador, la capa entera se
@@ -23,8 +30,9 @@ TECHO_ALPHA_OCULTO = 90   # opacidad (0-255) mientras tapa al jugador
 TECHO_VEL_FADE = 6.0      # velocidad del fundido (más alto = más rápido)
 
 # --- Jugador ---
-VELOCIDAD_JUGADOR = 220          # píxeles por segundo
-TAM_JUGADOR = (22, 26)           # hitbox (ancho, alto), un poco menor al tile
+# (Los valores en píxeles de mundo son el doble que con TILE=32)
+VELOCIDAD_JUGADOR = 440          # píxeles por segundo
+TAM_JUGADOR = (44, 52)           # hitbox (ancho, alto), un poco menor al tile
 POSICION_INICIAL = (5 * TILE, 3 * TILE)  # detrás del mostrador del local
 
 # --- Paleta de colores (pixel art, tonos realistas) ---
@@ -58,11 +66,11 @@ COLOR_TIENDA_TOLDO = (158, 58, 48)    # toldo rojo de la tienda
 # --- Combate (Fase 3) ---
 VIDA_JUGADOR = 100
 DANO_GOLPE = 15            # ataque cuerpo a cuerpo (sin arma)
-ALCANCE_GOLPE = 46         # px desde el centro del jugador
+ALCANCE_GOLPE = 92         # px desde el centro del jugador
 CADENCIA_GOLPE = 0.5       # segundos entre golpes
 DANO_PISTOLA = 25
 CADENCIA_PISTOLA = 0.35
-VELOCIDAD_BALA = 520       # px/s de las balas del jugador
+VELOCIDAD_BALA = 1040      # px/s de las balas del jugador
 DISPERSION_CADERA = 7      # grados de error disparando sin apuntar
 DISPERSION_APUNTADO = 2    # con la mira (click derecho)
 FRENO_APUNTADO = 0.55      # multiplicador de velocidad al apuntar
@@ -107,9 +115,9 @@ COLOR_MIRA            = (235, 235, 235)  # línea de apuntado
 # giran. La velocidad real persigue a la trompa según el "agarre"
 # de cada modelo (VEHICULOS en economy.py): esa diferencia es el
 # derrape. La simulación vive en src/vehicle.py.
-ACEL_VEHICULO = 260        # empuje del motor (px/s²)
-FRENO_VEHICULO = 540       # freno / aceleración de la reversa
-ROCE_VEHICULO = 130        # desaceleración natural al soltar todo
+ACEL_VEHICULO = 520        # empuje del motor (px/s²)
+FRENO_VEHICULO = 1080      # freno / aceleración de la reversa
+ROCE_VEHICULO = 260        # desaceleración natural al soltar todo
 GIRO_VEHICULO = 2.6        # radianes/s con el volante a fondo
 REVERSA_VEHICULO = 0.45    # vel. máx. marcha atrás (fracción de avance)
 CHOQUE_VEHICULO = 0.35     # rapidez que queda tras chocar una pared
@@ -117,7 +125,7 @@ CHOQUE_VEHICULO = 0.35     # rapidez que queda tras chocar una pared
 # el auto, para dar tiempo a reaccionar en las esquinas.
 CAMARA_SUAVIZADO = 0.002   # resto de distancia tras 1 s (menor = más dura)
 CAMARA_ADELANTO = 0.45     # segundos de velocidad que se adelanta
-CAMARA_ADELANTO_MAX = 120  # tope del adelanto (px)
+CAMARA_ADELANTO_MAX = 240  # tope del adelanto (px)
 
 # --- Fase 11: reloj de juego ---
 # 1 segundo real = 1 minuto de juego (un día dura 24 min reales)
