@@ -2305,13 +2305,13 @@ class PantallaCelular:
              ""),
             ("Químico", PRECIO_QUIMICO, economia.tiene_quimico,
              economia.tiene_conseguidor,
-             "Cocina compuestos del estante → crudo",
-             f"Sueldo: ${SUELDO_QUIMICO}/tanda",
+             "Cocina y planta TODO el estante junto",
+             f"Sueldo: ${SUELDO_QUIMICO}/lote",
              "Requiere Conseguidor"),
             ("Empaquetador", PRECIO_EMPAQUETADOR,
              economia.tiene_empaquetador, economia.tiene_quimico,
-             "Embolsa lo del estante en la mesa",
-             f"Sueldo: ${SUELDO_EMPAQUETADOR}/unidad",
+             "Se lleva todo y lo embolsa de a uno",
+             f"Sueldo: ${SUELDO_EMPAQUETADOR}/paquete",
              "Requiere Químico"),
         ]
         self._rects_items = []

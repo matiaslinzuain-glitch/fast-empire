@@ -2399,26 +2399,34 @@ class Juego:
         if self.quimico_npc is not None:
             resultado = self.quimico_npc.actualizar(
                 dt, estante, self.economia, self.arbol_meds)
-            if resultado == "tanda":
-                self.textos.append(TextoFlotante(
-                    self.quimico_npc.rect.centerx,
-                    self.quimico_npc.rect.top - 10,
-                    f"+1 crudo al estante (-${SUELDO_QUIMICO})",
-                    COLOR_DINERO))
-            elif resultado == "fallo":
-                self.textos.append(TextoFlotante(
-                    self.quimico_npc.rect.centerx,
-                    self.quimico_npc.rect.top - 10,
-                    f"¡Tanda arruinada! (-${SUELDO_QUIMICO})", COLOR_ERROR))
+            if resultado is not None and resultado[0] == "lote":
+                _, crudos, fallos, plantas = resultado
+                partes = []
+                if crudos:
+                    partes.append(f"+{crudos} crudos")
+                if plantas:
+                    partes.append(f"+{plantas} plantas")
+                if partes:
+                    self.textos.append(TextoFlotante(
+                        self.quimico_npc.rect.centerx,
+                        self.quimico_npc.rect.top - 10,
+                        f"{', '.join(partes)} al estante "
+                        f"(-${SUELDO_QUIMICO})", COLOR_DINERO))
+                if fallos:
+                    self.textos.append(TextoFlotante(
+                        self.quimico_npc.rect.centerx,
+                        self.quimico_npc.rect.top - 30,
+                        f"¡{fallos} tanda(s) arruinada(s)!", COLOR_ERROR))
         if self.empaquetador_npc is not None:
             resultado = self.empaquetador_npc.actualizar(
                 dt, estante, self.economia, self.arbol_meds)
-            if resultado is not None and resultado[0] == "paquete":
-                nombre = PRODUCTOS[resultado[1]]["nombre"]
+            if resultado is not None and resultado[0] == "lote":
+                unidades = resultado[1]
+                costo = SUELDO_EMPAQUETADOR * resultado[2]
                 self.textos.append(TextoFlotante(
                     self.empaquetador_npc.rect.centerx,
                     self.empaquetador_npc.rect.top - 10,
-                    f"+1 {nombre} al estante (-${SUELDO_EMPAQUETADOR})",
+                    f"+{unidades} medicamentos al estante (-${costo})",
                     COLOR_DINERO))
 
     def _actualizar_pedidos(self, dt):

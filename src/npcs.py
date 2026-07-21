@@ -677,7 +677,8 @@ def crear_transito(mapa, cantidad, lejos_de=None, radio_px=500):
 # ---------------------------------------------------------
 from .economy import (SUELDO_CONSEGUIDOR, SUELDO_QUIMICO,
                       SUELDO_EMPAQUETADOR)
-from .crafting import RECETAS_MESA, Sotano, SEGUNDOS_LABORATORIO
+from .crafting import (RECETAS_MESA, Sotano, SEGUNDOS_LABORATORIO,
+                       SEGUNDOS_PLANTA)
 
 
 class ConseguidorNPC(_Peaton):
@@ -765,10 +766,13 @@ class ConseguidorNPC(_Peaton):
 
 
 class QuimicoNPC(_Peaton):
-    """El químico: agarra compuestos del estante, los cocina en su
-    hornalla del sótano y devuelve QUÍMICO CRUDO al estante. Sufre y
-    goza los mismos efectos del árbol que el laboratorio (velocidad,
-    tandas falladas, insumo perdonado)."""
+    """El químico: se lleva TODO lo producible del estante de una
+    sola vez — todos los compuestos y todas las semillas — y lo
+    trabaja EN PARALELO en su rincón del sótano (hornallas y
+    macetas propias). Cuando el lote entero terminó, vuelve con
+    todo junto: crudos y plantas derechito al estante. Sufre y goza
+    los mismos efectos del árbol que el laboratorio (velocidad,
+    tandas falladas, insumo perdonado, Fertilizante)."""
 
     COLOR_DELANTAL = (120, 70, 160)   # violeta de químico
 
@@ -781,8 +785,11 @@ class QuimicoNPC(_Peaton):
         # esperando | yendo | cocinando | volviendo
         self.estado = "esperando"
         self.timer = 0.0
-        self.fallo = False
-        self.carga = 0
+        self.lote_compuestos = 0   # compuestos que se llevó
+        self.lote_semillas = 0     # semillas que se llevó
+        self.devolver = 0          # compuestos perdonados (Purificador)
+        self.crudos = 0            # resultado del lote
+        self.fallos = 0
 
     def irse(self):
         pass
@@ -791,39 +798,68 @@ class QuimicoNPC(_Peaton):
         pass
 
     def actualizar(self, dt, estante, economia, arbol):
-        """Devuelve "tanda" al dejar un crudo en el estante, "fallo"
-        si la cocinada salió mal; None si no pasó nada."""
+        """Devuelve ("lote", crudos, fallos, plantas) al volcar el
+        lote terminado en el estante; None si no pasó nada."""
         if self.estado == "esperando":
-            if (arbol.desbloqueado("med_quim")
-                    and estante.cantidad("compuestos") > 0
-                    and economia.dinero >= SUELDO_QUIMICO):
-                gratis = random.random() < arbol.prob_insumos_gratis(
-                    "med_quim")
-                if not gratis:
-                    estante.quitar("compuestos")
-                self.estado = "yendo"
+            if economia.dinero < SUELDO_QUIMICO:
+                return None
+            comp = (estante.cantidad("compuestos")
+                    if arbol.desbloqueado("med_quim") else 0)
+            sem = estante.cantidad("semillas")
+            if comp == 0 and sem == 0:
+                return None
+            # Se lleva TODO de una: nada de viajar de a uno
+            if comp:
+                estante.quitar("compuestos", comp)
+            if sem:
+                estante.quitar("semillas", sem)
+            self.lote_compuestos = comp
+            self.lote_semillas = sem
+            # El Purificador de Mermas perdona algunos compuestos:
+            # esos vuelven al estante junto con el lote
+            self.devolver = sum(
+                1 for _ in range(comp)
+                if random.random() < arbol.prob_insumos_gratis("med_quim"))
+            self.estado = "yendo"
 
         elif self.estado == "yendo":
             if self._avanzar_hacia(self.puesto_lab, dt) < 16:
-                self.timer = SEGUNDOS_LABORATORIO * arbol.mult_tiempo_lab()
-                self.fallo = random.random() < arbol.prob_fallo_lab()
+                # Todo en paralelo: el lote tarda lo que tarde lo
+                # MÁS LENTO (hornalla o maceta), no la suma
+                timer = 0.0
+                if self.lote_compuestos:
+                    timer = SEGUNDOS_LABORATORIO * arbol.mult_tiempo_lab()
+                if self.lote_semillas:
+                    timer = max(timer, SEGUNDOS_PLANTA
+                                * arbol.mult_tiempo_maceta())
+                self.timer = timer
+                # Cada compuesto corre su propio riesgo de fallar
+                self.fallos = sum(
+                    1 for _ in range(self.lote_compuestos)
+                    if random.random() < arbol.prob_fallo_lab())
+                self.crudos = self.lote_compuestos - self.fallos
                 self.estado = "cocinando"
 
         elif self.estado == "cocinando":
             self.timer -= dt
             if self.timer <= 0:
-                self.carga = 0 if self.fallo else 1
                 self.estado = "volviendo"
 
         elif self.estado == "volviendo":
             if self._avanzar_hacia(self.puesto, dt) < 16:
-                fallo = self.carga == 0
-                if self.carga:
-                    estante.agregar("quimico_crudo", self.carga)
-                self.carga = 0
+                if self.crudos:
+                    estante.agregar("quimico_crudo", self.crudos)
+                if self.lote_semillas:
+                    estante.agregar("planta", self.lote_semillas)
+                if self.devolver:
+                    estante.agregar("compuestos", self.devolver)
+                resultado = ("lote", self.crudos, self.fallos,
+                             self.lote_semillas)
+                self.lote_compuestos = self.lote_semillas = 0
+                self.crudos = self.fallos = self.devolver = 0
                 self.estado = "esperando"
                 economia.dinero -= SUELDO_QUIMICO
-                return "fallo" if fallo else "tanda"
+                return resultado
         return None
 
     def dibujar(self, superficie, camara):
@@ -836,10 +872,12 @@ class QuimicoNPC(_Peaton):
 
 
 class EmpaquetadorNPC(_Peaton):
-    """El empaquetador: junta lo que haya en el estante (plantas,
-    químico crudo y bolsas ziploc), lo embolsa en la mesa de armado
-    y devuelve el medicamento TERMINADO al estante. Arma siempre el
-    mejor tier que el estante pueda pagar (como la mesa)."""
+    """El empaquetador: se lleva del estante TODO lo empaquetable de
+    una sola vez (plantas, químico crudo y bolsas ziploc), lo va
+    embolsando en la mesa de a uno a medida que sale, y cuando el
+    lote entero está listo vuelve con todos los medicamentos
+    TERMINADOS al estante. Arma siempre el mejor tier que el estante
+    pueda pagar (como la mesa)."""
 
     COLOR_DELANTAL = (70, 120, 120)   # verde agua de operario
     SEGUNDOS_EMPAQUE = 6.0
@@ -853,7 +891,9 @@ class EmpaquetadorNPC(_Peaton):
         # esperando | yendo | empaquetando | volviendo
         self.estado = "esperando"
         self.timer = 0.0
-        self.ultimo = None    # id del último producto armado
+        self.cola = []         # productos pendientes del lote
+        self.hechos = []       # (producto, unidades) ya embolsados
+        self.perdonados = []   # recetas cuyos insumos se perdonaron
 
     def irse(self):
         pass
@@ -861,21 +901,44 @@ class EmpaquetadorNPC(_Peaton):
     def entrar_en_panico(self):
         pass
 
-    def _receta_posible(self, estante, arbol):
-        for prod, receta in RECETAS_MESA:
-            if not arbol.desbloqueado(prod):
-                continue
-            if all(estante.tiene(i, n) for i, n in receta.items()):
-                return prod
-        return None
+    def _armar_cola(self, estante, arbol):
+        """Se lleva del estante TODO lo empaquetable de una sola vez:
+        va reservando recetas (el mejor tier primero, como la mesa)
+        hasta que no queda nada armable. Devuelve la lista de
+        productos a empaquetar; los insumos ya salieron del estante
+        (con Cultivo Abundante / Purificador algunos se perdonan y
+        vuelven al final del viaje)."""
+        cola = []
+        while len(cola) < 20:      # tope sano por viaje
+            for prod, receta in RECETAS_MESA:
+                if not arbol.desbloqueado(prod):
+                    continue
+                if all(estante.tiene(i, n) for i, n in receta.items()):
+                    gratis = (random.random()
+                              < arbol.prob_insumos_gratis(prod))
+                    if not gratis:
+                        for i, n in receta.items():
+                            estante.quitar(i, n)
+                    else:
+                        self.perdonados.append(dict(receta))
+                    cola.append(prod)
+                    break
+            else:
+                break
+        return cola
 
     def actualizar(self, dt, estante, economia, arbol):
-        """Devuelve ("paquete", producto) al dejar un medicamento
-        terminado en el estante; None si no."""
+        """Devuelve ("lote", unidades) al volcar el lote terminado
+        en el estante; None si no pasó nada."""
         if self.estado == "esperando":
-            if (self._receta_posible(estante, arbol) is not None
-                    and economia.dinero >= SUELDO_EMPAQUETADOR):
-                self.estado = "yendo"
+            if economia.dinero < SUELDO_EMPAQUETADOR:
+                return None
+            self.perdonados = []
+            self.cola = self._armar_cola(estante, arbol)
+            if not self.cola:
+                return None
+            self.hechos = []       # productos ya empaquetados
+            self.estado = "yendo"
 
         elif self.estado == "yendo":
             if self._avanzar_hacia(self.puesto_mesa, dt) < 16:
@@ -883,30 +946,34 @@ class EmpaquetadorNPC(_Peaton):
                 self.estado = "empaquetando"
 
         elif self.estado == "empaquetando":
+            # Va embolsando la cola de a uno, a medida que salen
             self.timer -= dt
             if self.timer <= 0:
-                self.ultimo = None
-                for prod, receta in RECETAS_MESA:
-                    if not arbol.desbloqueado(prod):
-                        continue
-                    gratis = random.random() < arbol.prob_insumos_gratis(
-                        prod)
-                    doble = random.random() < arbol.prob_unidad_extra(prod)
-                    if Sotano.craftear(estante, receta, prod,
-                                       cantidad=2 if doble else 1,
-                                       consumir=not gratis):
-                        self.ultimo = prod
-                        break
-                self.estado = "volviendo"
+                prod = self.cola.pop(0)
+                doble = random.random() < arbol.prob_unidad_extra(prod)
+                self.hechos.append((prod, 2 if doble else 1))
+                if self.cola:
+                    self.timer = self.SEGUNDOS_EMPAQUE
+                else:
+                    self.estado = "volviendo"
 
         elif self.estado == "volviendo":
             if self._avanzar_hacia(self.puesto, dt) < 16:
-                producto = self.ultimo
-                self.ultimo = None
+                unidades = 0
+                paquetes = len(self.hechos)
+                for prod, n in self.hechos:
+                    estante.agregar(prod, n)
+                    unidades += n
+                # Los insumos perdonados por las habilidades vuelven
+                for receta in self.perdonados:
+                    for i, n in receta.items():
+                        estante.agregar(i, n)
+                economia.dinero -= SUELDO_EMPAQUETADOR * paquetes
+                self.hechos = []
+                self.perdonados = []
                 self.estado = "esperando"
-                if producto is not None:
-                    economia.dinero -= SUELDO_EMPAQUETADOR
-                    return ("paquete", producto)
+                if unidades:
+                    return ("lote", unidades, paquetes)
         return None
 
     def dibujar(self, superficie, camara):
