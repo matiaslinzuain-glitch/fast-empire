@@ -767,29 +767,35 @@ class ConseguidorNPC(_Peaton):
 
 class QuimicoNPC(_Peaton):
     """El químico: se lleva TODO lo producible del estante de una
-    sola vez — todos los compuestos y todas las semillas — y lo
-    trabaja EN PARALELO en su rincón del sótano (hornallas y
-    macetas propias). Cuando el lote entero terminó, vuelve con
-    todo junto: crudos y plantas derechito al estante. Sufre y goza
-    los mismos efectos del árbol que el laboratorio (velocidad,
-    tandas falladas, insumo perdonado, Fertilizante)."""
+    sola vez y pone CADA COSA EN SU LUGAR — siembra las semillas en
+    la maceta, carga los compuestos en la hornalla — y no se queda
+    parado mirando la olla: vuelve a su puesto junto al estante
+    mientras las estaciones trabajan solas. Cuando el lote entero
+    terminó, pasa a RECOGER por cada estación y deja toda la
+    producción junta en el estante. Sufre y goza los mismos efectos
+    del árbol que el laboratorio (velocidad, tandas falladas,
+    insumo perdonado, Fertilizante)."""
 
     COLOR_DELANTAL = (120, 70, 160)   # violeta de químico
 
-    def __init__(self, puesto, puesto_lab):
+    def __init__(self, puesto, puesto_lab, puesto_maceta=None):
         super().__init__(puesto[0], puesto[1], self.COLOR_DELANTAL)
         self.rect.center = (round(puesto[0]), round(puesto[1]))
         self.pos.update(self.rect.topleft)
         self.puesto = pygame.Vector2(puesto)
         self.puesto_lab = pygame.Vector2(puesto_lab)
-        # esperando | yendo | cocinando | volviendo
+        self.puesto_maceta = pygame.Vector2(puesto_maceta or puesto_lab)
+        # esperando | sembrando | cargando | aguardando |
+        # recoger_maceta | recoger_lab | volviendo
         self.estado = "esperando"
-        self.timer = 0.0
+        self.timer_lab = None      # None = la hornalla está vacía
+        self.timer_maceta = None   # None = la maceta está vacía
         self.lote_compuestos = 0   # compuestos que se llevó
         self.lote_semillas = 0     # semillas que se llevó
         self.devolver = 0          # compuestos perdonados (Purificador)
         self.crudos = 0            # resultado del lote
         self.fallos = 0
+        self.en_brazos = False     # ya recogió (para el dibujito)
 
     def irse(self):
         pass
@@ -800,6 +806,12 @@ class QuimicoNPC(_Peaton):
     def actualizar(self, dt, estante, economia, arbol):
         """Devuelve ("lote", crudos, fallos, plantas) al volcar el
         lote terminado en el estante; None si no pasó nada."""
+        # Las estaciones trabajan SOLAS, camine él donde camine
+        if self.timer_maceta is not None and self.timer_maceta > 0:
+            self.timer_maceta = max(0.0, self.timer_maceta - dt)
+        if self.timer_lab is not None and self.timer_lab > 0:
+            self.timer_lab = max(0.0, self.timer_lab - dt)
+
         if self.estado == "esperando":
             if economia.dinero < SUELDO_QUIMICO:
                 return None
@@ -820,29 +832,58 @@ class QuimicoNPC(_Peaton):
             self.devolver = sum(
                 1 for _ in range(comp)
                 if random.random() < arbol.prob_insumos_gratis("med_quim"))
-            self.estado = "yendo"
+            self.en_brazos = True     # sale cargado de insumos
+            self.estado = "sembrando" if sem else "cargando"
 
-        elif self.estado == "yendo":
+        elif self.estado == "sembrando":
+            # Primera parada: las semillas a la maceta
+            if self._avanzar_hacia(self.puesto_maceta, dt) < 16:
+                self.timer_maceta = (SEGUNDOS_PLANTA
+                                     * arbol.mult_tiempo_maceta())
+                self.estado = ("cargando" if self.lote_compuestos
+                               else "aguardando")
+                if self.estado == "aguardando":
+                    self.en_brazos = False
+
+        elif self.estado == "cargando":
+            # Segunda parada: los compuestos a la hornalla
             if self._avanzar_hacia(self.puesto_lab, dt) < 16:
-                # Todo en paralelo: el lote tarda lo que tarde lo
-                # MÁS LENTO (hornalla o maceta), no la suma
-                timer = 0.0
-                if self.lote_compuestos:
-                    timer = SEGUNDOS_LABORATORIO * arbol.mult_tiempo_lab()
-                if self.lote_semillas:
-                    timer = max(timer, SEGUNDOS_PLANTA
-                                * arbol.mult_tiempo_maceta())
-                self.timer = timer
+                self.timer_lab = (SEGUNDOS_LABORATORIO
+                                  * arbol.mult_tiempo_lab())
                 # Cada compuesto corre su propio riesgo de fallar
                 self.fallos = sum(
                     1 for _ in range(self.lote_compuestos)
                     if random.random() < arbol.prob_fallo_lab())
                 self.crudos = self.lote_compuestos - self.fallos
-                self.estado = "cocinando"
+                self.en_brazos = False
+                self.estado = "aguardando"
 
-        elif self.estado == "cocinando":
-            self.timer -= dt
-            if self.timer <= 0:
+        elif self.estado == "aguardando":
+            # De vuelta a su puesto MIENTRAS las estaciones trabajan
+            self._avanzar_hacia(self.puesto, dt)
+            maceta_lista = self.timer_maceta is None or self.timer_maceta <= 0
+            lab_listo = self.timer_lab is None or self.timer_lab <= 0
+            if maceta_lista and lab_listo:
+                if self.timer_maceta is not None:
+                    self.estado = "recoger_maceta"
+                elif self.timer_lab is not None:
+                    self.estado = "recoger_lab"
+                else:
+                    self.estado = "volviendo"
+
+        elif self.estado == "recoger_maceta":
+            # A cosechar las plantas
+            if self._avanzar_hacia(self.puesto_maceta, dt) < 16:
+                self.timer_maceta = None
+                self.en_brazos = True
+                self.estado = ("recoger_lab" if self.timer_lab is not None
+                               else "volviendo")
+
+        elif self.estado == "recoger_lab":
+            # A retirar los crudos de la hornalla
+            if self._avanzar_hacia(self.puesto_lab, dt) < 16:
+                self.timer_lab = None
+                self.en_brazos = True
                 self.estado = "volviendo"
 
         elif self.estado == "volviendo":
@@ -857,6 +898,7 @@ class QuimicoNPC(_Peaton):
                              self.lote_semillas)
                 self.lote_compuestos = self.lote_semillas = 0
                 self.crudos = self.fallos = self.devolver = 0
+                self.en_brazos = False
                 self.estado = "esperando"
                 economia.dinero -= SUELDO_QUIMICO
                 return resultado
@@ -865,10 +907,11 @@ class QuimicoNPC(_Peaton):
     def dibujar(self, superficie, camara):
         r = camara.aplicar(self.rect)
         dibujar_personaje(superficie, r, self.paleta, self)
-        if self.estado == "cocinando":
-            vapor = pygame.Surface((16, 16), pygame.SRCALPHA)
-            vapor.fill((190, 140, 255, 170))
-            superficie.blit(vapor, (r.centerx - 8, r.y - 20))
+        if self.en_brazos:
+            # La bandeja con el lote (insumos o producción)
+            caja = pygame.Rect(r.x + 2, r.y + 18, 32, 18)
+            pygame.draw.rect(superficie, (150, 110, 190), caja)
+            pygame.draw.rect(superficie, (100, 70, 140), caja, 2)
 
 
 class EmpaquetadorNPC(_Peaton):

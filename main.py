@@ -1930,7 +1930,8 @@ class Juego:
             # Espera del otro lado del estante para no pisarse con
             # el conseguidor
             puesto = (puesto_estante[0] + TILE, puesto_estante[1])
-            self.quimico_npc = QuimicoNPC(puesto, puesto_lab)
+            self.quimico_npc = QuimicoNPC(puesto, puesto_lab,
+                                          self._punto_maceta())
         elif not self.economia.tiene_quimico:
             self.quimico_npc = None
         if self.economia.tiene_empaquetador and self.empaquetador_npc is None:
@@ -1956,6 +1957,16 @@ class Juego:
                 return (mueble.col * TILE + TILE // 2,
                         mueble.fila * TILE + TILE + 30)
         return None
+
+    def _punto_maceta(self):
+        """La maceta del SÓTANO donde el Químico siembra, o (si la
+        levantaron) su rincón de cocina como plan B."""
+        for mueble in self.muebles_mundo:
+            if (mueble.tipo == "maceta"
+                    and mueble.fila * TILE >= Y_SUBSUELO):
+                return (mueble.col * TILE + TILE // 2,
+                        mueble.fila * TILE + TILE + 30)
+        return self._punto_hornalla()
 
     def _sincronizar_vendedores_npc(self):
         """Cada vendedor colocado aparece como NPC estático en el
