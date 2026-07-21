@@ -66,11 +66,14 @@ class _Peaton:
         return self.muerto
 
     def _avanzar_hacia(self, destino, dt, velocidad=VELOCIDAD_PEATON):
-        """Da un paso hacia el destino y devuelve la distancia restante."""
+        """Da un paso hacia el destino y devuelve la distancia
+        restante. El paso nunca se pasa de largo (con un frame
+        largo, oscilaría alrededor del objetivo sin llegar)."""
         hacia = pygame.Vector2(destino) - pygame.Vector2(self.rect.center)
         distancia = hacia.length()
         if distancia > 1:
-            self.pos += hacia.normalize() * velocidad * dt
+            paso = min(velocidad * dt, distancia)
+            self.pos += hacia.normalize() * paso
             self.rect.topleft = (round(self.pos.x), round(self.pos.y))
         return distancia
 
@@ -665,3 +668,252 @@ def crear_transito(mapa, cantidad, lejos_de=None, radio_px=500):
             continue
         autos.append(AutoNPC(col, fila, random.choice(tipos)))
     return autos
+
+
+# ---------------------------------------------------------
+# El equipo del laboratorio (app Equipo del celular): la
+# cadena clandestina del sótano. Los tres trabajan SOLO con
+# el ESTANTE — jamás tocan el inventario de Walter.
+# ---------------------------------------------------------
+from .economy import (SUELDO_CONSEGUIDOR, SUELDO_QUIMICO,
+                      SUELDO_EMPAQUETADOR)
+from .crafting import RECETAS_MESA, Sotano, SEGUNDOS_LABORATORIO
+
+
+class ConseguidorNPC(_Peaton):
+    """El conseguidor: vigila el estante del sótano y cuando falta
+    un insumo de medicamentos sale por la escalera, lo compra (paga
+    el pedido + su comisión con la plata de Walter) y lo deja en el
+    estante. Solo insumos del negocio: ziploc, semillas, compuestos."""
+
+    COLOR_CAMPERA = (140, 110, 60)
+    SEGUNDOS_COMPRA = 16.0    # cuánto tarda "afuera" comprando
+    # (item a vigilar, mínimo, contenido que trae, costo, requiere)
+    LISTA_COMPRAS = [
+        ("compuestos", 4, {"compuestos": 4}, 120, "med_quim"),
+        ("ziploc", 6, {"ziploc": 10}, 40, None),
+        ("semillas", 4, {"semillas": 4}, 70, "med_nat"),
+    ]
+
+    def __init__(self, puesto, escalera):
+        super().__init__(puesto[0], puesto[1], self.COLOR_CAMPERA)
+        self.rect.center = (round(puesto[0]), round(puesto[1]))
+        self.pos.update(self.rect.topleft)
+        self.puesto = pygame.Vector2(puesto)
+        self.escalera = pygame.Vector2(escalera)
+        # esperando | saliendo | comprando | volviendo
+        self.estado = "esperando"
+        self.compra = None      # entrada de LISTA_COMPRAS en curso
+        self.timer = 0.0
+
+    def irse(self):
+        pass   # empleado: no abandona el puesto
+
+    def entrar_en_panico(self):
+        pass   # ya vive al margen de la ley: no se asusta
+
+    def _que_falta(self, estante, arbol):
+        for item, minimo, contenido, costo, requiere in self.LISTA_COMPRAS:
+            if requiere is not None and not arbol.desbloqueado(requiere):
+                continue
+            if estante.cantidad(item) < minimo:
+                return (item, minimo, contenido, costo, requiere)
+        return None
+
+    def actualizar(self, dt, estante, economia, arbol):
+        """Devuelve ("compra", item, costo) al pagar el pedido, o
+        ("repuesto", item) al dejarlo en el estante; None si no."""
+        if self.estado == "esperando":
+            compra = self._que_falta(estante, arbol)
+            if compra is None:
+                return None
+            costo = compra[3] + SUELDO_CONSEGUIDOR
+            if not economia.pagar(costo):
+                return None      # sin plata: sigue esperando
+            self.compra = compra
+            self.estado = "saliendo"
+            return ("compra", compra[0], costo)
+
+        elif self.estado == "saliendo":
+            if self._avanzar_hacia(self.escalera, dt) < 20:
+                self.estado = "comprando"
+                self.timer = self.SEGUNDOS_COMPRA
+
+        elif self.estado == "comprando":
+            self.timer -= dt
+            if self.timer <= 0:
+                self.estado = "volviendo"
+
+        elif self.estado == "volviendo":
+            if self._avanzar_hacia(self.puesto, dt) < 16:
+                item = self.compra[0]
+                for id_item, n in self.compra[2].items():
+                    estante.agregar(id_item, n)
+                self.compra = None
+                self.estado = "esperando"
+                return ("repuesto", item)
+        return None
+
+    def dibujar(self, superficie, camara):
+        r = camara.aplicar(self.rect)
+        dibujar_personaje(superficie, r, self.paleta, self)
+        if self.estado == "volviendo":
+            caja = pygame.Rect(r.x + 2, r.y + 18, 32, 22)
+            pygame.draw.rect(superficie, COLOR_CAJA, caja)
+            pygame.draw.rect(superficie, COLOR_CAJA_CINTA,
+                             (caja.centerx - 2, caja.y, 6, caja.height))
+
+
+class QuimicoNPC(_Peaton):
+    """El químico: agarra compuestos del estante, los cocina en su
+    hornalla del sótano y devuelve QUÍMICO CRUDO al estante. Sufre y
+    goza los mismos efectos del árbol que el laboratorio (velocidad,
+    tandas falladas, insumo perdonado)."""
+
+    COLOR_DELANTAL = (120, 70, 160)   # violeta de químico
+
+    def __init__(self, puesto, puesto_lab):
+        super().__init__(puesto[0], puesto[1], self.COLOR_DELANTAL)
+        self.rect.center = (round(puesto[0]), round(puesto[1]))
+        self.pos.update(self.rect.topleft)
+        self.puesto = pygame.Vector2(puesto)
+        self.puesto_lab = pygame.Vector2(puesto_lab)
+        # esperando | yendo | cocinando | volviendo
+        self.estado = "esperando"
+        self.timer = 0.0
+        self.fallo = False
+        self.carga = 0
+
+    def irse(self):
+        pass
+
+    def entrar_en_panico(self):
+        pass
+
+    def actualizar(self, dt, estante, economia, arbol):
+        """Devuelve "tanda" al dejar un crudo en el estante, "fallo"
+        si la cocinada salió mal; None si no pasó nada."""
+        if self.estado == "esperando":
+            if (arbol.desbloqueado("med_quim")
+                    and estante.cantidad("compuestos") > 0
+                    and economia.dinero >= SUELDO_QUIMICO):
+                gratis = random.random() < arbol.prob_insumos_gratis(
+                    "med_quim")
+                if not gratis:
+                    estante.quitar("compuestos")
+                self.estado = "yendo"
+
+        elif self.estado == "yendo":
+            if self._avanzar_hacia(self.puesto_lab, dt) < 16:
+                self.timer = SEGUNDOS_LABORATORIO * arbol.mult_tiempo_lab()
+                self.fallo = random.random() < arbol.prob_fallo_lab()
+                self.estado = "cocinando"
+
+        elif self.estado == "cocinando":
+            self.timer -= dt
+            if self.timer <= 0:
+                self.carga = 0 if self.fallo else 1
+                self.estado = "volviendo"
+
+        elif self.estado == "volviendo":
+            if self._avanzar_hacia(self.puesto, dt) < 16:
+                fallo = self.carga == 0
+                if self.carga:
+                    estante.agregar("quimico_crudo", self.carga)
+                self.carga = 0
+                self.estado = "esperando"
+                economia.dinero -= SUELDO_QUIMICO
+                return "fallo" if fallo else "tanda"
+        return None
+
+    def dibujar(self, superficie, camara):
+        r = camara.aplicar(self.rect)
+        dibujar_personaje(superficie, r, self.paleta, self)
+        if self.estado == "cocinando":
+            vapor = pygame.Surface((16, 16), pygame.SRCALPHA)
+            vapor.fill((190, 140, 255, 170))
+            superficie.blit(vapor, (r.centerx - 8, r.y - 20))
+
+
+class EmpaquetadorNPC(_Peaton):
+    """El empaquetador: junta lo que haya en el estante (plantas,
+    químico crudo y bolsas ziploc), lo embolsa en la mesa de armado
+    y devuelve el medicamento TERMINADO al estante. Arma siempre el
+    mejor tier que el estante pueda pagar (como la mesa)."""
+
+    COLOR_DELANTAL = (70, 120, 120)   # verde agua de operario
+    SEGUNDOS_EMPAQUE = 6.0
+
+    def __init__(self, puesto, puesto_mesa):
+        super().__init__(puesto[0], puesto[1], self.COLOR_DELANTAL)
+        self.rect.center = (round(puesto[0]), round(puesto[1]))
+        self.pos.update(self.rect.topleft)
+        self.puesto = pygame.Vector2(puesto)
+        self.puesto_mesa = pygame.Vector2(puesto_mesa)
+        # esperando | yendo | empaquetando | volviendo
+        self.estado = "esperando"
+        self.timer = 0.0
+        self.ultimo = None    # id del último producto armado
+
+    def irse(self):
+        pass
+
+    def entrar_en_panico(self):
+        pass
+
+    def _receta_posible(self, estante, arbol):
+        for prod, receta in RECETAS_MESA:
+            if not arbol.desbloqueado(prod):
+                continue
+            if all(estante.tiene(i, n) for i, n in receta.items()):
+                return prod
+        return None
+
+    def actualizar(self, dt, estante, economia, arbol):
+        """Devuelve ("paquete", producto) al dejar un medicamento
+        terminado en el estante; None si no."""
+        if self.estado == "esperando":
+            if (self._receta_posible(estante, arbol) is not None
+                    and economia.dinero >= SUELDO_EMPAQUETADOR):
+                self.estado = "yendo"
+
+        elif self.estado == "yendo":
+            if self._avanzar_hacia(self.puesto_mesa, dt) < 16:
+                self.timer = self.SEGUNDOS_EMPAQUE
+                self.estado = "empaquetando"
+
+        elif self.estado == "empaquetando":
+            self.timer -= dt
+            if self.timer <= 0:
+                self.ultimo = None
+                for prod, receta in RECETAS_MESA:
+                    if not arbol.desbloqueado(prod):
+                        continue
+                    gratis = random.random() < arbol.prob_insumos_gratis(
+                        prod)
+                    doble = random.random() < arbol.prob_unidad_extra(prod)
+                    if Sotano.craftear(estante, receta, prod,
+                                       cantidad=2 if doble else 1,
+                                       consumir=not gratis):
+                        self.ultimo = prod
+                        break
+                self.estado = "volviendo"
+
+        elif self.estado == "volviendo":
+            if self._avanzar_hacia(self.puesto, dt) < 16:
+                producto = self.ultimo
+                self.ultimo = None
+                self.estado = "esperando"
+                if producto is not None:
+                    economia.dinero -= SUELDO_EMPAQUETADOR
+                    return ("paquete", producto)
+        return None
+
+    def dibujar(self, superficie, camara):
+        r = camara.aplicar(self.rect)
+        dibujar_personaje(superficie, r, self.paleta, self)
+        if self.estado == "empaquetando":
+            bolsa = pygame.Rect(r.x + 4, r.y + 16, 22, 26)
+            pygame.draw.rect(superficie, (188, 200, 210), bolsa)
+            pygame.draw.rect(superficie, (240, 210, 80),
+                             (bolsa.x, bolsa.y, bolsa.width, 5))

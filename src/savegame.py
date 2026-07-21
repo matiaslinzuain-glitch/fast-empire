@@ -40,6 +40,7 @@ CAMPOS_ECONOMIA = [
     "total_ilegal", "total_comida", "meds_desbloqueados",
     "receta_especial", "vehiculo",
     "tiene_mozo", "tiene_chef", "tiene_repositor", "contenedor_ing",
+    "tiene_conseguidor", "tiene_quimico", "tiene_empaquetador",
 ]
 
 # Contadores de partidas viejas que se migran al inventario

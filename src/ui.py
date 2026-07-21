@@ -40,6 +40,8 @@ from .economy import (
     NOMBRE_MED, NOMBRE_ITEM, VEHICULOS, ITEMS_SIEMPRE_ENCIMA, MUEBLES,
     PRECIO_MOZO, PRECIO_CHEF, PRECIO_REPOSITOR,
     COMISION_MOZO, SUELDO_CHEF, SUELDO_REPOSITOR,
+    PRECIO_CONSEGUIDOR, PRECIO_QUIMICO, PRECIO_EMPAQUETADOR,
+    SUELDO_CONSEGUIDOR, SUELDO_QUIMICO, SUELDO_EMPAQUETADOR,
 )
 from .crafting import receta_texto
 from .inventory import mover as mover_stack
@@ -1267,7 +1269,7 @@ class PantallaConcesionaria(_MenuVertical):
 # ---------------------------------------------------------
 class PantallaCelular:
     APPS = ["Comidas", "Insumos", "Mapa", "Mensajes", "Red", "Ventas",
-            "Personal"]
+            "Personal", "Equipo"]
     IDS_COMIDA    = ["ing6", "ing12"]
     # Ya no se compran medicamentos hechos: se compran los insumos
     # y se fabrica en el sótano del local
@@ -1295,6 +1297,7 @@ class PantallaCelular:
         ("Red",      (110,  60, 150)),
         ("Ventas",   (170, 130, 30)),
         ("Personal", ( 55, 110, 85)),
+        ("Equipo",   ( 90,  45, 120)),   # el personal del laboratorio
     ]
 
     def __init__(self):
@@ -1365,6 +1368,8 @@ class PantallaCelular:
                 return self._ev_ventas(evento, arbol, app_ventas)
             elif self.app == 6:
                 return self._ev_personal(evento, economia)
+            elif self.app == 7:
+                return self._ev_equipo(evento, economia)
         elif evento.type == pygame.MOUSEBUTTONDOWN and evento.button == 1:
             if self.en_home:
                 for i, r in enumerate(self._rects_home):
@@ -1393,6 +1398,8 @@ class PantallaCelular:
                         self._alternar_venta(arbol, app_ventas)
                     elif self.app == 6:
                         return self._contratar(economia)
+                    elif self.app == 7:
+                        return self._contratar_equipo(economia)
         elif evento.type == pygame.MOUSEMOTION:
             if self.en_home:
                 for i, r in enumerate(self._rects_home):
@@ -1522,6 +1529,55 @@ class PantallaCelular:
             ("repositor", economia.tiene_repositor, economia.tiene_chef,
              "Primero contratá al chef.",
              PRECIO_REPOSITOR, ("contratar_repositor",)),
+        ]
+        (nombre, contratado, habilitado, falta,
+         precio, accion) = puestos[self.seleccion % len(puestos)]
+        if not habilitado:
+            self.mensaje = falta
+            self.color_mensaje = COLOR_ERROR
+        elif contratado:
+            self.mensaje = f"El {nombre} ya trabaja para vos."
+            self.color_mensaje = COLOR_TEXTO_SUAVE
+        elif economia.dinero < precio:
+            self.mensaje = "No te alcanza."
+            self.color_mensaje = COLOR_ERROR
+        else:
+            self.mensaje = f"¡{nombre.capitalize()} contratado!"
+            self.color_mensaje = COLOR_DINERO
+            return accion
+        return None
+
+    def _ev_equipo(self, evento, economia):
+        """App Equipo: el personal del laboratorio (sótano)."""
+        n = 3
+        self.seleccion %= n
+        if evento.key in (pygame.K_w, pygame.K_UP):
+            self.seleccion = (self.seleccion - 1) % n
+        elif evento.key in (pygame.K_s, pygame.K_DOWN):
+            self.seleccion = (self.seleccion + 1) % n
+        elif evento.key in (pygame.K_RETURN, pygame.K_e, pygame.K_SPACE):
+            return self._contratar_equipo(economia)
+        return None
+
+    def _contratar_equipo(self, economia):
+        """Valida la contratación del equipo del laboratorio.
+        Devuelve ("contratar_conseguidor",) / ("contratar_quimico",)
+        / ("contratar_empaquetador",) o None con mensaje."""
+        if not economia.meds_desbloqueados:
+            self.mensaje = "Número fuera de servicio."
+            self.color_mensaje = COLOR_ERROR
+            return None
+        puestos = [
+            ("conseguidor", economia.tiene_conseguidor, True, "",
+             PRECIO_CONSEGUIDOR, ("contratar_conseguidor",)),
+            ("químico", economia.tiene_quimico,
+             economia.tiene_conseguidor,
+             "Primero contratá al conseguidor.",
+             PRECIO_QUIMICO, ("contratar_quimico",)),
+            ("empaquetador", economia.tiene_empaquetador,
+             economia.tiene_quimico,
+             "Primero contratá al químico.",
+             PRECIO_EMPAQUETADOR, ("contratar_empaquetador",)),
         ]
         (nombre, contratado, habilitado, falta,
          precio, accion) = puestos[self.seleccion % len(puestos)]
@@ -1746,6 +1802,17 @@ class PantallaCelular:
                                  border_radius=6)
                 pygame.draw.rect(sup.raw, (210, 165, 80),
                                  (cx - 5, cy + 3, 10, 14), border_radius=3)
+            elif i == 7:  # Equipo: frasco de laboratorio burbujeante
+                pygame.draw.rect(sup.raw, (220, 230, 240),
+                                 (cx - 4, cy - 14, 8, 6))
+                pygame.draw.polygon(sup.raw, (220, 230, 240),
+                                    [(cx - 4, cy - 8), (cx + 4, cy - 8),
+                                     (cx + 12, cy + 12), (cx - 12, cy + 12)])
+                pygame.draw.polygon(sup.raw, (190, 140, 255),
+                                    [(cx - 8, cy + 2), (cx + 8, cy + 2),
+                                     (cx + 12, cy + 12), (cx - 12, cy + 12)])
+                for bx, by in ((cx - 3, cy - 2), (cx + 4, cy - 5)):
+                    pygame.draw.circle(sup.raw, (230, 200, 255), (bx, by), 2)
 
             etq = self.fuente_chica.render(nombre, True, COLOR_TEXTO)
             sup.blit(etq, (rect.centerx - etq.get_width() // 2, rect.bottom + 4))
@@ -1773,6 +1840,8 @@ class PantallaCelular:
             self._app_ventas(sup, cont, economia, arbol, app_ventas)
         elif self.app == 6:
             self._app_personal(sup, cont, economia)
+        elif self.app == 7:
+            self._app_equipo(sup, cont, economia)
         else:
             self._app_mensajes(sup, cont, tratos, reloj, gestor)
 
@@ -2204,6 +2273,102 @@ class PantallaCelular:
 
         sup.blit(self.fuente_mini.render(
             "E — contratar  ·  si matan al empleado, perdés la contratación",
+            True, COLOR_TEXTO_SUAVE), (zona.x + 8, zona.bottom - 40))
+        if self.mensaje:
+            sup.blit(self.fuente_chica.render(
+                self.mensaje, True, self.color_mensaje),
+                (zona.x + 8, zona.bottom - 24))
+
+    def _app_equipo(self, sup, zona, economia):
+        """App Equipo: el personal del LABORATORIO. Trabajan solo
+        con el estante del sótano, en cadena:
+        Conseguidor → Químico → Empaquetador."""
+        sup.blit(self.fuente_titulo.render("Equipo del laboratorio",
+                                           True, COLOR_ORO),
+                 (zona.x + 10, zona.y + 4))
+        plata = self.fuente_chica.render(f"$ {economia.dinero}",
+                                         True, COLOR_DINERO)
+        sup.blit(plata, (zona.right - plata.get_width() - 10,
+                         zona.bottom - 24))
+
+        if not economia.meds_desbloqueados:
+            sup.blit(self.fuente_chica.render(
+                "Número fuera de servicio.", True, COLOR_TEXTO_SUAVE),
+                (zona.x + 10, zona.y + 48))
+            return
+
+        empleados = [
+            ("Conseguidor", PRECIO_CONSEGUIDOR,
+             economia.tiene_conseguidor, True,
+             "Compra insumos y los deja en el estante",
+             f"Comisión: ${SUELDO_CONSEGUIDOR}/viaje + el pedido",
+             ""),
+            ("Químico", PRECIO_QUIMICO, economia.tiene_quimico,
+             economia.tiene_conseguidor,
+             "Cocina compuestos del estante → crudo",
+             f"Sueldo: ${SUELDO_QUIMICO}/tanda",
+             "Requiere Conseguidor"),
+            ("Empaquetador", PRECIO_EMPAQUETADOR,
+             economia.tiene_empaquetador, economia.tiene_quimico,
+             "Embolsa lo del estante en la mesa",
+             f"Sueldo: ${SUELDO_EMPAQUETADOR}/unidad",
+             "Requiere Químico"),
+        ]
+        self._rects_items = []
+        y = zona.y + 44
+        for i, (nombre, precio, contratado, disponible,
+                desc, sueldo, requisito) in enumerate(empleados):
+            r = pygame.Rect(zona.x + 6, y, zona.width - 12, 92)
+            self._rects_items.append(r)
+            elegido = i == self.seleccion % len(empleados)
+            pygame.draw.rect(sup.raw,
+                             (40, 32, 52) if elegido else (26, 22, 34),
+                             r, border_radius=8)
+            if elegido:
+                pygame.draw.rect(sup.raw, COLOR_APP_ACTIVA, r, 1,
+                                 border_radius=8)
+            caja = pygame.Rect(r.x + 8, r.y + 8, 16, 16)
+            pygame.draw.rect(sup.raw, (18, 20, 26), caja, border_radius=4)
+            pygame.draw.rect(sup.raw,
+                             COLOR_DINERO if contratado else COLOR_TEXTO_SUAVE,
+                             caja, 1, border_radius=4)
+            if contratado:
+                pygame.draw.line(sup.raw, COLOR_DINERO,
+                                 (caja.x + 3, caja.centery),
+                                 (caja.centerx - 1, caja.bottom - 4), 2)
+                pygame.draw.line(sup.raw, COLOR_DINERO,
+                                 (caja.centerx - 1, caja.bottom - 4),
+                                 (caja.right - 3, caja.y + 3), 2)
+            elif disponible:
+                pygame.draw.polygon(sup.raw, COLOR_ORO,
+                                    [(caja.x + 5, caja.y + 4),
+                                     (caja.x + 11, caja.centery),
+                                     (caja.x + 5, caja.bottom - 4)])
+            color_n = (COLOR_TEXTO if contratado or disponible
+                       else COLOR_TEXTO_SUAVE)
+            sup.blit(self.fuente_chica.render(nombre, True, color_n),
+                     (r.x + 32, r.y + 7))
+            if contratado:
+                etq = self.fuente_chica.render("ACTIVO", True, COLOR_DINERO)
+            else:
+                etq = self.fuente_chica.render(
+                    f"${precio}", True,
+                    COLOR_DINERO if disponible else COLOR_TEXTO_SUAVE)
+            sup.blit(etq, (r.right - etq.get_width() - 10, r.y + 7))
+            color_d = (COLOR_TEXTO_SUAVE if contratado or disponible
+                       else (100, 100, 110))
+            sup.blit(self.fuente_chica.render(desc, True, color_d),
+                     (r.x + 32, r.y + 30))
+            sup.blit(self.fuente_chica.render(sueldo, True, color_d),
+                     (r.x + 32, r.y + 50))
+            if not contratado and not disponible:
+                sup.blit(self.fuente_mini.render(
+                    requisito, True, COLOR_ERROR),
+                    (r.x + 32, r.y + 72))
+            y += 98
+
+        sup.blit(self.fuente_mini.render(
+            "E — contratar  ·  trabajan con el ESTANTE del sótano",
             True, COLOR_TEXTO_SUAVE), (zona.x + 8, zona.bottom - 40))
         if self.mensaje:
             sup.blit(self.fuente_chica.render(

@@ -160,6 +160,19 @@ PRECIO_REPOSITOR = 250
 MAX_CONTENEDOR = 24  # límite del contenedor de ingredientes (unidades)
 GRILLA_CONTENEDOR = (4, 1)  # slots visibles del contenedor del Chef
 
+# --- Personal del LABORATORIO (app Equipo del celular) ---
+# La cadena clandestina del sótano, en orden de contratación:
+# Conseguidor (trae insumos al estante) → Químico (cocina compuestos
+# del estante → químico crudo al estante) → Empaquetador (embolsa lo
+# del estante en la mesa → medicamento al estante). Todos trabajan
+# SOLO con el estante: jamás tocan el inventario de Walter.
+PRECIO_CONSEGUIDOR = 500
+PRECIO_QUIMICO = 700
+PRECIO_EMPAQUETADOR = 600
+SUELDO_CONSEGUIDOR = 15   # $ por viaje (aparte del costo del pedido)
+SUELDO_QUIMICO = 12       # $ por tanda cocinada
+SUELDO_EMPAQUETADOR = 8   # $ por unidad empaquetada
+
 # --- Armas y curación (almacén del barrio) ---
 PRECIO_PISTOLA = 150
 BALAS_POR_PACK = 12
@@ -247,6 +260,10 @@ class Economia:
         self.tiene_mozo = False
         self.tiene_chef = False
         self.tiene_repositor = False
+        # El equipo del laboratorio (app Equipo)
+        self.tiene_conseguidor = False
+        self.tiene_quimico = False
+        self.tiene_empaquetador = False
         # El contenedor de ingredientes al lado del horno (Chef):
         # una grilla propia — `contenedor_ing` (abajo) lo expone
         # como el contador de siempre para npcs.py y el savegame

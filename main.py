@@ -49,17 +49,21 @@ from src.camera import Camara
 from src.economy import (
     Economia, Produccion, Caja, Trato, RedVentas,
     PEDIDOS, TIEMPO_ENTREGA, INGREDIENTES_POR_TANDA, NOMBRE_MED,
+    NOMBRE_ITEM,
     PUNTOS_POR_RIVAL, PUNTOS_POR_ESCAPE, UMBRAL_DESBLOQUEO_MEDS,
     PRECIO_CURACION, CURA_SANGUCHE, LUGARES_VENTA,
     MAX_TRATOS_ACTIVOS, MAX_OFERTAS, VENTAS_PARA_CONTACTO,
     SEGUNDOS_RECONQUISTA, VEHICULOS, MULT_CONDUCIR, VENTA_MED,
     COMISION_MOZO, SUELDO_CHEF, PRECIO_MOZO, PRECIO_CHEF,
     SUELDO_REPOSITOR, PRECIO_REPOSITOR,
+    PRECIO_CONSEGUIDOR, PRECIO_QUIMICO, PRECIO_EMPAQUETADOR,
+    SUELDO_QUIMICO, SUELDO_EMPAQUETADOR,
     MAX_CONTENEDOR, MUEBLES,
 )
 from src.npcs import (
     ClienteLocal, CompradorIlegal, Proveedor, VendedorZona,
     ContactoFlash, MozoNPC, ChefNPC, RepositorNPC,
+    ConseguidorNPC, QuimicoNPC, EmpaquetadorNPC,
     crear_ciudadanos, crear_transito,
 )
 from src.events import GestorEventos, PROB_EMBOSCADA, EMBOSCADORES
@@ -246,6 +250,11 @@ class Juego:
         self.mozo_npc = None
         self.chef_npc = None
         self.repositor_npc = None
+        # El equipo del laboratorio (app Equipo — trabajan en el
+        # sótano, solo con el estante)
+        self.conseguidor_npc = None
+        self.quimico_npc = None
+        self.empaquetador_npc = None
 
         # El negocio ilegal (dormido hasta charlar con el Proveedor):
         # tratos acordados por celular en vez de un punto rotativo
@@ -539,6 +548,21 @@ class Juego:
                     if (self.economia.tiene_chef
                             and self.economia.pagar(PRECIO_REPOSITOR)):
                         self.economia.tiene_repositor = True
+                        self._sincronizar_empleados()
+                elif accion[0] == "contratar_conseguidor":
+                    if (self.economia.meds_desbloqueados
+                            and self.economia.pagar(PRECIO_CONSEGUIDOR)):
+                        self.economia.tiene_conseguidor = True
+                        self._sincronizar_empleados()
+                elif accion[0] == "contratar_quimico":
+                    if (self.economia.tiene_conseguidor
+                            and self.economia.pagar(PRECIO_QUIMICO)):
+                        self.economia.tiene_quimico = True
+                        self._sincronizar_empleados()
+                elif accion[0] == "contratar_empaquetador":
+                    if (self.economia.tiene_quimico
+                            and self.economia.pagar(PRECIO_EMPAQUETADOR)):
+                        self.economia.tiene_empaquetador = True
                         self._sincronizar_empleados()
 
         elif self.estado == "inventario":
@@ -1706,7 +1730,9 @@ class Juego:
     def _npcs_atacables(self):
         """Todos los NPCs con vida (Fase 11: también se pueden matar)."""
         empleados = [n for n in (self.mozo_npc, self.chef_npc,
-                                 self.repositor_npc)
+                                 self.repositor_npc,
+                                 self.conseguidor_npc, self.quimico_npc,
+                                 self.empaquetador_npc)
                      if n is not None]
         return (self.fila + self.comensales + self.compradores
                 + empleados + self.ciudadanos)
@@ -1890,6 +1916,46 @@ class Juego:
             self.repositor_npc = RepositorNPC(puesto, PUNTO_PUERTA)
         elif not self.economia.tiene_repositor:
             self.repositor_npc = None
+
+        # --- El equipo del laboratorio (viven en el sótano) ---
+        puesto_estante = self._punto_sotano(self.mapa.tiles_estante)
+        puesto_mesa = self._punto_sotano(self.mapa.tiles_mesa)
+        puesto_lab = self._punto_hornalla() or puesto_estante
+        escalera = self._punto_sotano(self.mapa.tiles_subida)
+        if self.economia.tiene_conseguidor and self.conseguidor_npc is None:
+            self.conseguidor_npc = ConseguidorNPC(puesto_estante, escalera)
+        elif not self.economia.tiene_conseguidor:
+            self.conseguidor_npc = None
+        if self.economia.tiene_quimico and self.quimico_npc is None:
+            # Espera del otro lado del estante para no pisarse con
+            # el conseguidor
+            puesto = (puesto_estante[0] + TILE, puesto_estante[1])
+            self.quimico_npc = QuimicoNPC(puesto, puesto_lab)
+        elif not self.economia.tiene_quimico:
+            self.quimico_npc = None
+        if self.economia.tiene_empaquetador and self.empaquetador_npc is None:
+            puesto = (puesto_estante[0] - TILE, puesto_estante[1])
+            self.empaquetador_npc = EmpaquetadorNPC(puesto, puesto_mesa)
+        elif not self.economia.tiene_empaquetador:
+            self.empaquetador_npc = None
+
+    def _punto_sotano(self, tiles):
+        """Un punto parado DEBAJO del primer tile de la lista (los
+        tiles de las estaciones son sólidos: nadie se para encima)."""
+        if not tiles:
+            return (0, 0)
+        rect = tiles[0]
+        return (rect.centerx, rect.bottom + 30)
+
+    def _punto_hornalla(self):
+        """La mesa de laboratorio del SÓTANO (mueble colocable) donde
+        cocina el Químico, o None si la levantaron."""
+        for mueble in self.muebles_mundo:
+            if (mueble.tipo == "mesa_lab"
+                    and mueble.fila * TILE >= Y_SUBSUELO):
+                return (mueble.col * TILE + TILE // 2,
+                        mueble.fila * TILE + TILE + 30)
+        return None
 
     def _sincronizar_vendedores_npc(self):
         """Cada vendedor colocado aparece como NPC estático en el
@@ -2206,6 +2272,22 @@ class Juego:
             self.economia.tiene_repositor = False
             self._texto_sobre_jugador("¡Te mataron al repositor!",
                                       COLOR_ERROR)
+        if self.conseguidor_npc is not None and self.conseguidor_npc.muerto:
+            self.conseguidor_npc = None
+            self.economia.tiene_conseguidor = False
+            self._texto_sobre_jugador("¡Te mataron al conseguidor!",
+                                      COLOR_ERROR)
+        if self.quimico_npc is not None and self.quimico_npc.muerto:
+            self.quimico_npc = None
+            self.economia.tiene_quimico = False
+            self._texto_sobre_jugador("¡Te mataron al químico!",
+                                      COLOR_ERROR)
+        if (self.empaquetador_npc is not None
+                and self.empaquetador_npc.muerto):
+            self.empaquetador_npc = None
+            self.economia.tiene_empaquetador = False
+            self._texto_sobre_jugador("¡Te mataron al empaquetador!",
+                                      COLOR_ERROR)
 
         # Búsqueda: decae más rápido con "Fantasma" (pero no mientras
         # la policía te está rastreando por un homicidio)
@@ -2292,6 +2374,52 @@ class Juego:
                     self.repositor_npc.rect.centerx,
                     self.repositor_npc.rect.top - 10,
                     f"-${SUELDO_REPOSITOR} repositor", COLOR_ERROR))
+
+        self._actualizar_equipo_lab(dt)
+
+    def _actualizar_equipo_lab(self, dt):
+        """La cadena del sótano: Conseguidor (insumos al estante) →
+        Químico (compuestos → crudo) → Empaquetador (crudo/planta +
+        ziploc → medicamento). Todos contra el ESTANTE."""
+        estante = self.sotano.estante
+        if self.conseguidor_npc is not None:
+            resultado = self.conseguidor_npc.actualizar(
+                dt, estante, self.economia, self.arbol_meds)
+            if resultado is not None and resultado[0] == "compra":
+                self.textos.append(TextoFlotante(
+                    self.conseguidor_npc.rect.centerx,
+                    self.conseguidor_npc.rect.top - 10,
+                    f"-${resultado[2]} conseguidor", COLOR_ERROR))
+            elif resultado is not None and resultado[0] == "repuesto":
+                self.textos.append(TextoFlotante(
+                    self.conseguidor_npc.rect.centerx,
+                    self.conseguidor_npc.rect.top - 10,
+                    f"+{NOMBRE_ITEM.get(resultado[1], resultado[1])} "
+                    "al estante", COLOR_DINERO))
+        if self.quimico_npc is not None:
+            resultado = self.quimico_npc.actualizar(
+                dt, estante, self.economia, self.arbol_meds)
+            if resultado == "tanda":
+                self.textos.append(TextoFlotante(
+                    self.quimico_npc.rect.centerx,
+                    self.quimico_npc.rect.top - 10,
+                    f"+1 crudo al estante (-${SUELDO_QUIMICO})",
+                    COLOR_DINERO))
+            elif resultado == "fallo":
+                self.textos.append(TextoFlotante(
+                    self.quimico_npc.rect.centerx,
+                    self.quimico_npc.rect.top - 10,
+                    f"¡Tanda arruinada! (-${SUELDO_QUIMICO})", COLOR_ERROR))
+        if self.empaquetador_npc is not None:
+            resultado = self.empaquetador_npc.actualizar(
+                dt, estante, self.economia, self.arbol_meds)
+            if resultado is not None and resultado[0] == "paquete":
+                nombre = PRODUCTOS[resultado[1]]["nombre"]
+                self.textos.append(TextoFlotante(
+                    self.empaquetador_npc.rect.centerx,
+                    self.empaquetador_npc.rect.top - 10,
+                    f"+1 {nombre} al estante (-${SUELDO_EMPAQUETADOR})",
+                    COLOR_DINERO))
 
     def _actualizar_pedidos(self, dt):
         """Deliveries en camino → cajas en la puerta."""
@@ -2491,6 +2619,10 @@ class Juego:
             self.chef_npc.dibujar(self.pantalla, self.camara)
         if self.repositor_npc is not None:
             self.repositor_npc.dibujar(self.pantalla, self.camara)
+        for empleado in (self.conseguidor_npc, self.quimico_npc,
+                         self.empaquetador_npc):
+            if empleado is not None:
+                empleado.dibujar(self.pantalla, self.camara)
         if self.proveedor is not None:
             self.proveedor.dibujar(self.pantalla, self.camara)
             if self.proveedor.estado == "esperando":
