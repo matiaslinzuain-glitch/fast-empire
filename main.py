@@ -1924,7 +1924,6 @@ class Juego:
         # --- El equipo del laboratorio (viven en el sótano) ---
         puesto_estante = self._punto_sotano(self.mapa.tiles_estante)
         puesto_mesa = self._punto_sotano(self.mapa.tiles_mesa)
-        puesto_lab = self._punto_hornalla() or puesto_estante
         escalera = self._punto_sotano(self.mapa.tiles_subida)
         if self.economia.tiene_conseguidor and self.conseguidor_npc is None:
             self.conseguidor_npc = ConseguidorNPC(puesto_estante, escalera)
@@ -1932,10 +1931,10 @@ class Juego:
             self.conseguidor_npc = None
         if self.economia.tiene_quimico and self.quimico_npc is None:
             # Espera del otro lado del estante para no pisarse con
-            # el conseguidor
+            # el conseguidor (las estaciones se le pasan por frame:
+            # usa las macetas y mesas REALES del sótano)
             puesto = (puesto_estante[0] + TILE, puesto_estante[1])
-            self.quimico_npc = QuimicoNPC(puesto, puesto_lab,
-                                          self._punto_maceta())
+            self.quimico_npc = QuimicoNPC(puesto)
         elif not self.economia.tiene_quimico:
             self.quimico_npc = None
         if self.economia.tiene_empaquetador and self.empaquetador_npc is None:
@@ -1951,26 +1950,6 @@ class Juego:
             return (0, 0)
         rect = tiles[0]
         return (rect.centerx, rect.bottom + 30)
-
-    def _punto_hornalla(self):
-        """La mesa de laboratorio del SÓTANO (mueble colocable) donde
-        cocina el Químico, o None si la levantaron."""
-        for mueble in self.muebles_mundo:
-            if (mueble.tipo == "mesa_lab"
-                    and mueble.fila * TILE >= Y_SUBSUELO):
-                return (mueble.col * TILE + TILE // 2,
-                        mueble.fila * TILE + TILE + 30)
-        return None
-
-    def _punto_maceta(self):
-        """La maceta del SÓTANO donde el Químico siembra, o (si la
-        levantaron) su rincón de cocina como plan B."""
-        for mueble in self.muebles_mundo:
-            if (mueble.tipo == "maceta"
-                    and mueble.fila * TILE >= Y_SUBSUELO):
-                return (mueble.col * TILE + TILE // 2,
-                        mueble.fila * TILE + TILE + 30)
-        return self._punto_hornalla()
 
     def _sincronizar_vendedores_npc(self):
         """Cada vendedor colocado aparece como NPC estático en el
@@ -2444,8 +2423,14 @@ class Juego:
                     f"+{NOMBRE_ITEM.get(resultado[1], resultado[1])} "
                     "al estante", COLOR_DINERO))
         if self.quimico_npc is not None:
+            # Sus estaciones: las macetas y mesas de lab del SÓTANO
+            muebles_sotano = [
+                m for m in self.muebles_mundo
+                if m.fila * TILE >= Y_SUBSUELO
+                and m.tipo in ("maceta", "mesa_lab")]
             resultado = self.quimico_npc.actualizar(
-                dt, estante, self.economia, self.arbol_meds)
+                dt, estante, self.economia, self.arbol_meds,
+                muebles_sotano)
             if resultado is not None and resultado[0] == "lote":
                 _, crudos, fallos, plantas = resultado
                 partes = []
