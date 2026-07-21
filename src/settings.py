@@ -36,9 +36,18 @@ TECHO_VEL_FADE = 6.0      # velocidad del fundido (más alto = más rápido)
 
 # --- Jugador ---
 # (Los valores en píxeles de mundo son el doble que con TILE=32)
-VELOCIDAD_JUGADOR = 440          # píxeles por segundo
+VELOCIDAD_JUGADOR = 440          # píxeles por segundo (tope a pie)
 TAM_JUGADOR = (44, 52)           # hitbox (ancho, alto), un poco menor al tile
 POSICION_INICIAL = (5 * TILE, 3 * TILE)  # detrás del mostrador del local
+
+# --- Sensación de movimiento a pie ("game feel") ---
+# Inercia CORTA y snappy: arranca en ~0.1 s y frena un toque más rápido,
+# así se siente peso sin volverse resbaloso. El giro es casi instantáneo
+# porque al pedir el sentido opuesto se usa la fricción fuerte (ver player).
+ACEL_JUGADOR      = 4600   # px/s²: acelera de 0 a tope en ~0.10 s
+FRICCION_JUGADOR  = 6800   # px/s²: al soltar (o girar) frena parejo y firme
+# Cámara: adelanto (lookahead) a pie, fracción de la velocidad actual.
+CAMARA_ADELANTO_PIE = 0.26
 
 # --- Paleta de colores (pixel art, tonos realistas) ---
 COLOR_FONDO       = (18, 18, 22)     # negro azulado de fondo

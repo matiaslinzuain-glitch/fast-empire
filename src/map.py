@@ -737,8 +737,7 @@ class Mapa:
 
     def dibujar(self, superficie, camara):
         """Blitea solo los tiles visibles en pantalla (culling)."""
-        ox = round(camara.offset.x)
-        oy = round(camara.offset.y)
+        ox, oy = camara.desplazamiento()
         col_inicio = max(0, ox // TILE)
         col_fin = min(self.columnas,
                       (ox + superficie.get_width()) // TILE + 2)
@@ -818,8 +817,7 @@ class Mapa:
             else:
                 self._alpha_grupos[g] = a
 
-        ox = round(camara.offset.x)
-        oy = round(camara.offset.y)
+        ox, oy = camara.desplazamiento()
         col_inicio = max(0, ox // TILE)
         col_fin = min(self.columnas,
                       (ox + superficie.get_width()) // TILE + 2)

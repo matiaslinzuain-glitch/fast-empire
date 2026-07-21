@@ -15,6 +15,8 @@
 #   rect_en_pantalla = camara.aplicar(rect)  # al dibujar cualquier cosa
 # =========================================================
 
+import random
+
 import pygame
 
 from .settings import ANCHO_LIENZO, ALTO_LIENZO, CAMARA_SUAVIZADO
@@ -29,6 +31,14 @@ class Camara:
         self.y_subsuelo = y_subsuelo
         # Offset = esquina superior izquierda de la "ventana" sobre el mundo
         self.offset = pygame.Vector2(0, 0)
+        # Screen shake: magnitud (px) que decae sola cada frame.
+        self.shake = 0.0
+        self._temblor = pygame.Vector2(0, 0)
+
+    def sacudir(self, magnitud):
+        """Golpe de cámara: se queda con el más fuerte que pidan en el
+        frame (impactos, etc.). Decae solo en `actualizar`."""
+        self.shake = max(self.shake, magnitud)
 
     def actualizar(self, rect_objetivo, dt=None, adelanto=(0, 0)):
         """Sigue al objetivo (normalmente el jugador), clampeada a los
@@ -64,7 +74,25 @@ class Camara:
             self.offset.x += (destino_x - self.offset.x) * t
             self.offset.y += (destino_y - self.offset.y) * t
 
+        # Temblor: se recalcula cada frame y decae rápido (~en 0.25 s).
+        if self.shake > 0.2:
+            self._temblor.update(random.uniform(-self.shake, self.shake),
+                                 random.uniform(-self.shake, self.shake))
+            caida = 40.0 * (dt if dt else 1 / 60)
+            self.shake = max(0.0, self.shake - caida)
+        else:
+            self.shake = 0.0
+            self._temblor.update(0, 0)
+
+    def desplazamiento(self):
+        """Origen de la cámara (px, enteros) INCLUYENDO el temblor. Lo
+        usan el mapa y todo lo que dibuje leyendo el offset directo, para
+        que el screen shake mueva el mundo entero parejo."""
+        return (round(self.offset.x + self._temblor.x),
+                round(self.offset.y + self._temblor.y))
+
     def aplicar(self, rect):
         """Convierte un rect en coordenadas de mundo a coordenadas
         de pantalla. Devuelve un rect nuevo (no modifica el original)."""
-        return rect.move(-round(self.offset.x), -round(self.offset.y))
+        return rect.move(-round(self.offset.x + self._temblor.x),
+                         -round(self.offset.y + self._temblor.y))

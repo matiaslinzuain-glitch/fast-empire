@@ -37,6 +37,7 @@ from src.settings import (
     CADENCIA_PISTOLA, VELOCIDAD_BALA,
     DANO_GOLPE, ALCANCE_GOLPE, CADENCIA_GOLPE,
     DISPERSION_CADERA, DISPERSION_APUNTADO,
+    CAMARA_ADELANTO_PIE, CAMARA_ADELANTO_MAX,
 )
 from src.map import (
     Mapa, PUNTO_PUERTA, PUNTO_ENTREGA, POSICIONES_FILA,
@@ -46,6 +47,7 @@ from src.map import (
 )
 from src.player import Jugador
 from src.camera import Camara
+from src.efectos import polvo
 from src.economy import (
     Economia, Produccion, Caja, Trato, RedVentas,
     PEDIDOS, TIEMPO_ENTREGA, INGREDIENTES_POR_TANDA, NOMBRE_MED,
@@ -239,6 +241,8 @@ class Juego:
         self.app_ventas = AppSalesManager()  # app del celular: qué vender
         self.reloj_juego = RelojJuego()
         self.textos = []
+        self.particulas = []        # polvo (arranques y frenadas)
+        self._dist_paso = 0.0       # acumulador para los pasos a pie
 
         # El local
         self.fila = []                # ClienteLocal esperando (en orden)
@@ -2078,6 +2082,7 @@ class Juego:
             self.jugador.velocidad = (VELOCIDAD_JUGADOR
                                       * self.habilidades.velocidad_mult())
             self.jugador.actualizar(dt, paredes_jugador)
+            self._feedback_pie(dt)
         if self.debug:
             self.jugador.pos.x = max(0, min(self.jugador.pos.x,
                                             self.mapa.ancho_px - self.jugador.rect.w))
@@ -2316,16 +2321,47 @@ class Juego:
         for texto in self.textos:
             texto.actualizar(dt)
         self.textos = [t for t in self.textos if t.vida > 0]
+        for p in self.particulas:
+            p.actualizar(dt)
+        self.particulas = [p for p in self.particulas if p.vida > 0]
         if self.aviso:
             self.aviso_timer -= dt
             if self.aviso_timer <= 0:
                 self.aviso = None
 
-        # Cámara con retraso suave; conduciendo se adelanta hacia
-        # donde viaja el auto para ver venir las esquinas
-        adelanto = (self.fisica_vehiculo.adelanto_camara()
-                    if self.montado else (0, 0))
+        # Cámara con retraso suave; conduciendo se adelanta hacia donde
+        # viaja el auto, y a pie hacia donde camina Walter (lookahead),
+        # para ver venir las esquinas.
+        if self.montado:
+            adelanto = self.fisica_vehiculo.adelanto_camara()
+        else:
+            av = self.jugador.vel * CAMARA_ADELANTO_PIE
+            if av.length() > CAMARA_ADELANTO_MAX:
+                av.scale_to_length(CAMARA_ADELANTO_MAX)
+            adelanto = (round(av.x), round(av.y))
         self.camara.actualizar(self.jugador.rect, dt, adelanto)
+
+    def _feedback_pie(self, dt):
+        """Juice del movimiento a pie: polvo y ruido de pasos. Se llama
+        justo después de mover a Walter, leyendo sus banderas."""
+        j = self.jugador
+        pie = (j.rect.centerx, j.rect.bottom - 4)
+
+        # Frenada brusca: chirrido de polvo.
+        if j.freno_brusco:
+            polvo(self.particulas, *pie, 8, fuerza=120, base_dir=j.vel)
+
+        # Pasos por distancia recorrida (independiente de los FPS): cada
+        # ~46 px un pasito con polvito y un "toc" de pitch variado.
+        rapidez = j.vel.length()
+        if rapidez > 40:
+            self._dist_paso += rapidez * dt
+            if self._dist_paso >= 46:
+                self._dist_paso = 0.0
+                polvo(self.particulas, *pie, 3, fuerza=55, base_dir=j.vel)
+                self.audio.reproducir("paso")
+        else:
+            self._dist_paso = 0.0
 
     def _actualizar_local(self, dt):
         """Clientes del local: llegan, hacen fila, comen y se van."""
@@ -2660,6 +2696,9 @@ class Juego:
             self._signo(self.contacto_flash, "$", COLOR_ORO)
         for enemigo in self.inspectores + self.rivales:
             enemigo.dibujar(self.pantalla, self.camara)
+        # Polvo por debajo de Walter/vehículo (arranques y frenadas)
+        for particula in self.particulas:
+            particula.dibujar(self.pantalla, self.camara)
         if self.montado:
             # Walter va al volante: el vehículo se dibuja en su lugar,
             # rotado hacia donde apunta la trompa (24 direcciones)

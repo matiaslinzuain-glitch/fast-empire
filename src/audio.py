@@ -60,6 +60,7 @@ class Audio:
         "click": 0.7, "hablar": 0.5, "venta": 0.8, "cocinado": 0.8,
         "disparo": 0.6, "golpe": 0.7, "dano": 0.7, "caida": 0.9,
         "pedido": 0.8, "sirena": 0.8, "mudanza": 0.7, "error": 0.6,
+        "paso": 0.08,
     }
 
     def __init__(self):
@@ -67,6 +68,9 @@ class Audio:
         self.volumen = 0.8       # general (Opciones: pasos de 20%)
         self.musica_on = True
         self.sfx = {}
+        # Efectos con varias tomas: se elige una al azar por vez, así el
+        # sonido repetitivo (pasos) no cansa (pitch/timbre variado).
+        self.variantes = {}
         self.musica = None
         if not self.activo:
             return
@@ -99,6 +103,15 @@ class Audio:
             "mudanza": _muestras_a_sonido(_secuencia(
                 _tono(523, 0.10, 0.5), _tono(415, 0.18, 0.5))),
             "error": _muestras_a_sonido(_tono(175, 0.10, 0.5, "cuadrada")),
+        }
+        # Pasos: 5 tomas graves y suaves a frecuencias distintas, para
+        # que caminar no suene a metrónomo (el volumen bajo está en BASE).
+        self.variantes = {
+            "paso": [
+                _muestras_a_sonido(_secuencia(
+                    _tono(freq, 0.04, 0.25, "seno"), _ruido(0.015, 0.08)))
+                for freq in (82, 90, 98, 106, 114)
+            ]
         }
 
     def _generar_musica(self):
@@ -136,10 +149,16 @@ class Audio:
 
     # --- Reproducción ---
     def reproducir(self, nombre):
-        if self.activo and nombre in self.sfx:
+        if not self.activo:
+            return
+        if nombre in self.variantes:
+            sonido = random.choice(self.variantes[nombre])
+        elif nombre in self.sfx:
             sonido = self.sfx[nombre]
-            sonido.set_volume(self.volumen * self.BASE[nombre])
-            sonido.play()
+        else:
+            return
+        sonido.set_volume(self.volumen * self.BASE.get(nombre, 0.5))
+        sonido.play()
 
     def iniciar_musica(self):
         if self.activo and self.musica is not None and self.musica_on:

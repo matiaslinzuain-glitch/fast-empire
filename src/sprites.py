@@ -238,10 +238,11 @@ def dibujar_mueble(superficie, tipo, rect):
 
 
 def dibujar_personaje(superficie, rect_pantalla, paleta, entidad,
-                      mirando_izq=None):
+                      mirando_izq=None, escala=None):
     """Dibuja el sprite anclado al pie del hitbox. Detecta solo si la
     entidad caminó desde el último frame (posición de mundo) y, si no
-    se lo indican, hacia qué lado mira."""
+    se lo indican, hacia qué lado mira. `escala` (sx, sy) permite un
+    squash & stretch sutil sin mover los pies del suelo."""
     centro = entidad.rect.center
     anterior = getattr(entidad, "_sprite_prev", centro)
     entidad._sprite_prev = centro
@@ -257,5 +258,14 @@ def dibujar_personaje(superficie, rect_pantalla, paleta, entidad,
     else:
         frame = 0
     imagen = (espejados if mirando_izq else frames)[frame]
-    superficie.blit(imagen, (rect_pantalla.centerx - ANCHO_SPRITE // 2,
-                             rect_pantalla.bottom - ALTO_SPRITE))
+    if escala is not None and (abs(escala[0] - 1) > 0.01
+                               or abs(escala[1] - 1) > 0.01):
+        nw = max(1, round(ANCHO_SPRITE * escala[0]))
+        nh = max(1, round(ALTO_SPRITE * escala[1]))
+        imagen = pygame.transform.smoothscale(imagen, (nw, nh))
+        # Pies clavados al piso (bottom-center) aunque cambie el tamaño.
+        superficie.blit(imagen, (rect_pantalla.centerx - nw // 2,
+                                 rect_pantalla.bottom - nh))
+    else:
+        superficie.blit(imagen, (rect_pantalla.centerx - ANCHO_SPRITE // 2,
+                                 rect_pantalla.bottom - ALTO_SPRITE))
